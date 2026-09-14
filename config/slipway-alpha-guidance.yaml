@@ -1,0 +1,36 @@
+# Software in the loop ONLY: guidance sails Slipway's slipway-alpha on scenario alpha-navigation.
+#
+#   navigation --config config/slipway-alpha-guidance.yaml --connect tcp/localhost:7447
+#
+# It commands a vessel. Run it only against a Slipway kernel you started, with the
+# keelson-processor-autopilot container for slipway-alpha stopped. The authority level is fixed
+# here because Slipway runs no operational_authority aggregator; every navigation_state says so.
+
+realm: rise
+entity_id: slipway-alpha
+source_base: navigation/0
+codec: rider
+
+modules:
+  route_monitor: true
+  traffic: false
+  colreg: false
+  guidance: true
+  conduct: true
+  decision_log: true
+
+inputs:
+  location_fix: gnss
+  heading_true_north_deg: sim
+  course_over_ground_deg: sim
+  speed_over_ground_knots: sim
+  yaw_rate_degps: sim
+
+conduct:
+  take_conn_when_free: true
+  fixed_authority_level: AUTHORITY_LEVEL_REMOTE_CONTROLLED
+
+guidance:
+  responder_id: sim
+  full_ahead_sog_knots: 20.5       # alpha 2.0.0 cruises at 20.5 kn at 100 %
+  default_sog_knots: 8

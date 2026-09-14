@@ -2,18 +2,35 @@
 
 ``Processor.tick(now_ns)`` is the only entry point. It reads a World snapshot, returns the outputs
 for that instant and does no I/O, so the same code runs on a wall-clock timer in production and on
-Slipway's tick fence in software-in-the-loop (Phase 5).
+Slipway's tick fence in software-in-the-loop (Phase 5). What guidance wants on the helm is left in
+``Processor.actuation`` for the bus layer to publish at its own rate.
+
+Order within a tick: route selection, route_monitor, traffic, colreg, then conduct (lease,
+authority, advice acceptance, the state machine), guidance, and the decision log.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import config as config_mod
 from .bus.codec import rfc3339
 from .colreg.advisor import SUBJECTS as COLREG_SUBJECTS
 from .colreg.advisor import Advisor, OwnState, advisor_config
 from .colreg.records import DispositionRecord
+from .conduct.authority import UNKNOWN, InForce, in_force, may_auto_accept, may_drive
+from .conduct.fsm import Conduct, Gates
+from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig
 from .conduct.state import Mode, NavigationState, RouteRef
+from .guidance.axes import UNKNOWN as HELM_UNKNOWN
+from .guidance.axes import Actuation, ownership
+from .guidance.guide import MODULE as GUIDANCE
+from .guidance.guide import SUBJECTS as GUIDANCE_SUBJECTS
+from .guidance.guide import Guidance
+from .guidance.track import KNOT_MPS, Own
+from .log.decision_log import MODULE as DECISION_LOG
+from .log.decision_log import SUBJECTS as DECISION_SUBJECTS
+from .log.decision_log import DecisionLog
 from .route_monitor.monitor import MODULE as ROUTE_MONITOR
 from .route_monitor.monitor import RouteMonitor
 from .route_monitor.select import Selection, select
@@ -21,7 +38,22 @@ from .traffic.cpa import Kinematics
 from .traffic.monitor import MODULE as TRAFFIC
 from .traffic.monitor import PUBLISHED_SUBJECTS as TRAFFIC_SUBJECTS
 from .traffic.monitor import TrafficMonitor
+from .world.latch import fresh
 from .world.model import World
+
+GUIDANCE_INPUTS = (
+    "location_fix",
+    "heading_true_north_deg",
+    "course_over_ground_deg",
+    "speed_over_ground_knots",
+)
+_LEASE_KINDS = {
+    "taken": "KIND_CONN_TAKEN",
+    "granted": "KIND_CONN_GRANTED",
+    "lost": "KIND_CONN_LOST",
+    "released": "KIND_CONN_RELEASED",
+    "requested": "KIND_CONN_REQUESTED",
+}
 
 
 @dataclass(frozen=True)
@@ -34,7 +66,7 @@ class Output:
 
 
 class Processor:
-    def __init__(self, conf: dict, world: World | None = None, id_factory=None):
+    def __init__(self, conf: dict, world: World | None = None, id_factory=None, token_factory=None):
         self.conf = conf
         self.world = world or World()
         self._state_period_ns = int(1e9 / conf["state_hz"])
@@ -47,6 +79,28 @@ class Processor:
             else None
         )
         self.selection = Selection(None, "not started")
+
+        cd = conf["conduct"]
+        self.conduct = Conduct()
+        self.lease_book = LeaseBook()
+        self.lease = LeaseClient(
+            LeaseConfig(
+                vessel_id=conf["entity_id"],
+                controller_id=config_mod.controller_id(conf),
+                controller_site=cd["controller_site"],
+                ttl_s=cd["lease_ttl_s"],
+                heartbeat_s=cd["heartbeat_s"],
+                request_interval_s=cd["request_interval_s"],
+            ),
+            token_factory,
+        )
+        self.authority = InForce(UNKNOWN, "not evaluated")
+        self.guidance = Guidance(conf) if self.enabled(GUIDANCE) else None
+        self.decisions = DecisionLog(conf, id_factory) if self.enabled(DECISION_LOG) else None
+        self.conn_held = False
+        self._missing: tuple[str, ...] = ()
+        self._own_payload: dict | None = None
+        self._last_lease_event: str | None = None
 
     def enabled(self, module: str) -> bool:
         return bool(self.conf["modules"].get(module))
@@ -63,22 +117,40 @@ class Processor:
     def needs_dispositions(self) -> bool:
         return self.advisor is not None
 
+    @property
+    def needs_leases(self) -> bool:
+        return self.enabled("conduct")
+
+    @property
+    def actuation(self) -> Actuation:
+        """What guidance wants on the helm now. Silence unless guidance is driving."""
+        return self.guidance.actuation if self.guidance is not None else Actuation()
+
     def target_publications(self) -> dict[str, tuple[str, ...]]:
         """Subjects each module publishes under ``@target``; they also get a target-scoped token."""
         return {TRAFFIC: TRAFFIC_SUBJECTS} if self.traffic is not None else {}
 
     def publications(self) -> dict[str, tuple[str, ...]]:
         """Subjects each enabled module publishes under its own source id. Keys whose source slot
-        carries an id (route_execution, envelope_exceedance) are reported by ``dynamic_keys``."""
+        carries an id (route_execution, envelope_exceedance) are reported by ``dynamic_keys``.
+        command_authority and command_request are published under the vessel id, as keelson's
+        other lease holders do, and are not listed here."""
         pubs: dict[str, tuple[str, ...]] = {}
         if self.enabled("conduct"):
-            pubs["conduct"] = ("navigation_state",)
+            subjects = ["navigation_state"]
+            if self.conf["conduct"]["auto_accept_advice"]:
+                subjects.append("advice_disposition")
+            pubs["conduct"] = tuple(subjects)
         if self.monitor is not None:
             pubs[ROUTE_MONITOR] = ("alarm",) if self.conf["route_monitor"]["alarms"] else ()
         pubs.update(self.target_publications())
         if self.advisor is not None:
             subjects = COLREG_SUBJECTS if self.conf["colreg"]["alarms"] else COLREG_SUBJECTS[:-1]
             pubs["colreg"] = tuple(subjects)
+        if self.guidance is not None:
+            pubs[GUIDANCE] = GUIDANCE_SUBJECTS
+        if self.decisions is not None:
+            pubs[DECISION_LOG] = DECISION_SUBJECTS
         return pubs
 
     def dynamic_keys(self) -> set[tuple[str, str]]:
@@ -127,20 +199,231 @@ class Processor:
                         self._visibility(snapshot, now_ns),
                     )
                 ]
-        if self.enabled("conduct") and (
-            self._next_state_ns is None or now_ns >= self._next_state_ns
-        ):
-            outputs.append(Output("conduct", "navigation_state", self._state(now_ns).to_payload()))
-            # Anchor to the schedule so jitter does not accumulate; skip missed slots.
-            if self._next_state_ns is None:
-                self._next_state_ns = now_ns
-            while self._next_state_ns <= now_ns:
-                self._next_state_ns += self._state_period_ns
+        if self.enabled("conduct"):
+            outputs += self._conduct_step(snapshot, now_ns)
+            if self._next_state_ns is None or now_ns >= self._next_state_ns:
+                outputs.append(
+                    Output("conduct", "navigation_state", self._state(now_ns).to_payload())
+                )
+                # Anchor to the schedule so jitter does not accumulate; skip missed slots.
+                if self._next_state_ns is None:
+                    self._next_state_ns = now_ns
+                while self._next_state_ns <= now_ns:
+                    self._next_state_ns += self._state_period_ns
+        if self.decisions is not None:
+            outputs += [
+                Output(DECISION_LOG, e.subject, e.payload, e.source_id)
+                for e in self.decisions.step(now_ns)
+            ]
         return outputs
 
-    def _own_state(self, snapshot, now_ns: int) -> OwnState | None:
-        from .world.latch import fresh
+    # -- conduct -------------------------------------------------------------------------------
 
+    def _conduct_step(self, snapshot, now_ns: int) -> list[Output]:
+        cd = self.conf["conduct"]
+        out: list[Output] = []
+        for payload, received_ns in self.world.take_leases():
+            self.lease_book.hear(payload, received_ns)
+        for kind, detail in self.world.take_helm_events():
+            self._decide(now_ns, kind, config_mod.module_source_id(self.conf, GUIDANCE), detail)
+
+        self.authority = in_force(
+            snapshot.inputs.get("operational_authority"),
+            now_ns,
+            cd["authority_max_age_s"],
+            cd["fixed_authority_level"],
+        )
+        plan = self.selection.plan
+        own = self._guidance_own(snapshot, now_ns)
+        track = self.guidance.observe(plan, own) if self.guidance is not None else None
+        helm = self._helm(now_ns)
+
+        if self.advisor is not None and cd["auto_accept_advice"]:
+            out += self._auto_accept(now_ns)
+        accepted = self.advisor.accepted_advice(now_ns) if self.advisor is not None else None
+
+        progress = self.monitor.status.progress if self.monitor is not None else None
+        arrived = track.arrived if track is not None else bool(progress and progress.arrived)
+        self.conn_held = self.lease.held(self.lease_book, now_ns)
+        route_reason = self.selection.reason
+        if self.monitor is None and plan is not None:
+            route_reason += "; route_monitor disabled"
+        step = self.conduct.step(
+            Gates(
+                route=self.selection.execution_key_token if plan is not None else None,
+                route_reason=route_reason,
+                guidance=self.guidance is not None,
+                conn_held=self.conn_held,
+                conn_token=self.lease.token if self.conn_held else None,
+                conn_self_issued=self.conn_held and self.lease.token in self.lease.self_issued,
+                may_drive=may_drive(self.authority.level),
+                authority_note=self.authority.note,
+                ownship_fresh=not self._missing,
+                missing_inputs=self._missing,
+                helm=helm,
+                arrived=arrived,
+                avoiding=accepted is not None,
+            )
+        )
+        if step.changed:
+            self._decide(
+                now_ns,
+                "KIND_MODE_TRANSITION",
+                config_mod.module_source_id(self.conf, "conduct"),
+                f"{step.before.value} -> {step.mode.value}"
+                + (f" ({step.sub_mode.value})" if step.mode is Mode.UNDERWAY else ""),
+                reason=step.reason,
+                mode_before=step.before.value,
+                mode_after=step.mode.value,
+                advice_id=accepted.advice_id if accepted is not None else None,
+            )
+
+        mode = step.mode
+        want = (
+            self.guidance is not None
+            and plan is not None
+            and mode in (Mode.READY, Mode.UNDERWAY, Mode.FALLBACK)
+        )
+        may_take = (
+            cd["take_conn_when_free"]
+            and mode is Mode.READY
+            and may_drive(self.authority.level)
+            and not self._missing
+            and helm in ("free", "ours")
+        )
+        publish, events = self.lease.step(
+            self.lease_book, now_ns, want=want, may_take=may_take, may_request=cd["request_conn"]
+        )
+        for subject, payload in publish:
+            if subject == "command_authority":
+                self.lease_book.hear(payload, now_ns)
+            out.append(Output("conduct", subject, payload, source_id=self.conf["entity_id"]))
+        for event in events:
+            if not (event.kind == "requested" and self._last_lease_event == "requested"):
+                self._decide(
+                    now_ns,
+                    _LEASE_KINDS[event.kind],
+                    config_mod.module_source_id(self.conf, "conduct"),
+                    event.detail,
+                )
+            self._last_lease_event = event.kind
+        self.conn_held = self.lease.held(self.lease_book, now_ns)
+
+        if self.guidance is not None:
+            ref = None
+            if plan is not None:
+                ref = {"route_id": plan.route_id, "route_edition_number": plan.edition}
+            out += [
+                Output(GUIDANCE, e.subject, e.payload, e.source_id)
+                for e in self.guidance.step(
+                    now_ns,
+                    driving=mode is Mode.UNDERWAY,
+                    ended=mode is Mode.ENDED,
+                    helm=helm,
+                    plan=plan,
+                    own=own,
+                    advice=accepted,
+                    restricted_visibility=self._restricted(snapshot, now_ns),
+                    voyage_id=self.selection.voyage.voyage_id if self.selection.voyage else None,
+                    route_ref=ref,
+                )
+            ]
+        return out
+
+    def _auto_accept(self, now_ns: int) -> list[Output]:
+        """Accept the advisor's undecided advice when the conn is held, guidance is UNDERWAY and
+        the authority level allows it for the advice's worst risk (docs/PLAN.md §1)."""
+        if self.conduct.mode is not Mode.UNDERWAY or not self.lease.held(self.lease_book, now_ns):
+            return []
+        advice = self.advisor.undecided_advice(now_ns)
+        if advice is None:
+            return []
+        risk = self.advisor.worst_risk(advice)
+        level = self.authority.level
+        if not may_auto_accept(level, risk):
+            return []
+        decided_by = config_mod.module_source_id(self.conf, "conduct")
+        record = DispositionRecord(
+            rfc3339(now_ns),
+            advice.advice_id,
+            advice.voyage_id,
+            "STATE_ACCEPTED",
+            decided_by=decided_by,
+            decided_site=self.conf["conduct"]["controller_site"],
+            reason=f"accepted by conduct at {level}; worst encounter risk {risk}",
+        )
+        self.advisor.record_disposition(record)
+        self._decide(
+            now_ns,
+            "KIND_ADVICE_ACCEPTED",
+            decided_by,
+            f"accepted {advice.kind} advice {advice.advice_id}",
+            reason=record.reason,
+            advice_id=advice.advice_id,
+            encounter_ids=tuple(advice.encounter_ids),
+        )
+        token = self.selection.execution_key_token or "novoyage"
+        key_tail = f"{token}/{advice.advice_id}"
+        return [Output("conduct", "advice_disposition", record.to_payload(), key_tail)]
+
+    def _decide(self, now_ns: int, kind: str, decided_by: str, summary: str, **fields) -> None:
+        if self.decisions is None:
+            return
+        self.decisions.record(
+            now_ns,
+            kind,
+            decided_by,
+            summary,
+            voyage_id=self.selection.voyage.voyage_id if self.selection.voyage else None,
+            ownship=self._own_payload,
+            authority_level_in_force=self.authority.level,
+            conn_held=self.conn_held,
+            **fields,
+        )
+
+    def _guidance_own(self, snapshot, now_ns: int) -> Own | None:
+        age = self.conf["route_monitor"]["max_state_age_s"]
+        wanted = (*GUIDANCE_INPUTS, "yaw_rate_degps")
+        samples = {s: fresh(snapshot.inputs.get(s), now_ns, age) for s in wanted}
+        self._missing = tuple(s for s in GUIDANCE_INPUTS if samples[s] is None)
+        position = samples["location_fix"]
+        if position is not None:
+            lat, lon = position.value
+            self._own_payload = {"latitude_deg": lat, "longitude_deg": lon}
+            for subject, name, scale in (
+                ("heading_true_north_deg", "heading_deg", 1.0),
+                ("course_over_ground_deg", "course_over_ground_deg", 1.0),
+                ("speed_over_ground_knots", "sog_mps", KNOT_MPS),
+            ):
+                if samples[subject] is not None:
+                    self._own_payload[name] = samples[subject].value * scale
+        if self._missing:
+            return None
+        yaw = samples["yaw_rate_degps"]
+        return Own(
+            *position.value,
+            heading_deg=samples["heading_true_north_deg"].value,
+            cog_deg=samples["course_over_ground_deg"].value,
+            sog_knots=samples["speed_over_ground_knots"].value,
+            yaw_rate_degps=yaw.value if yaw is not None else None,
+        )
+
+    def _helm(self, now_ns: int) -> str:
+        heard = self.world.helm()
+        if heard is None or now_ns - heard[1] > self.conf["guidance"]["mapping_max_age_s"] * 1e9:
+            return HELM_UNKNOWN
+        return ownership(
+            heard[0], self.conf["entity_id"], config_mod.module_source_id(self.conf, GUIDANCE)
+        )
+
+    def _restricted(self, snapshot, now_ns: int) -> bool:
+        visibility = self._visibility(snapshot, now_ns)
+        limit = self.conf["colreg"]["restricted_visibility_m"]
+        return visibility is not None and visibility < limit
+
+    # -- inputs for the other modules ----------------------------------------------------------
+
+    def _own_state(self, snapshot, now_ns: int) -> OwnState | None:
         age = self.conf["route_monitor"]["max_state_age_s"]
         position = fresh(snapshot.inputs.get("location_fix"), now_ns, age)
         if position is None:
@@ -154,8 +437,6 @@ class Processor:
         )
 
     def _visibility(self, snapshot, now_ns: int) -> float | None:
-        from .world.latch import fresh
-
         s = fresh(
             snapshot.inputs.get("visibility_range_m"),
             now_ns,
@@ -172,17 +453,24 @@ class Processor:
 
     def _state(self, now_ns: int) -> NavigationState:
         sel = self.selection
-        if sel.plan is None:
-            return NavigationState(timestamp=rfc3339(now_ns), mode=Mode.IDLE, reason=sel.reason)
+        plan = sel.plan
         status = self.monitor.status if self.monitor is not None else None
         progress = status.progress if status else None
-        reason = sel.reason if self.monitor is not None else f"{sel.reason}; route_monitor disabled"
+        leg_from = progress.from_waypoint_id if progress else None
+        if self.conduct.mode is Mode.UNDERWAY and self.guidance and self.guidance.state:
+            leg_from = self.guidance.state.from_waypoint_id
+        degraded = list(status.degraded_inputs) if status else []
+        if self.guidance is not None and plan is not None:
+            degraded += [s for s in self._missing if s not in degraded]
         return NavigationState(
             timestamp=rfc3339(now_ns),
-            mode=Mode.READY,
-            reason=reason,
-            voyage_id=sel.voyage.voyage_id if sel.voyage else None,
-            route_ref=RouteRef(sel.plan.route_id, sel.plan.edition),
-            current_leg_from_waypoint_id=progress.from_waypoint_id if progress else None,
-            degraded_inputs=status.degraded_inputs if status else (),
+            mode=self.conduct.mode,
+            sub_mode=self.conduct.sub_mode,
+            reason=self.conduct.reason,
+            voyage_id=sel.voyage.voyage_id if sel.voyage and plan is not None else None,
+            route_ref=RouteRef(plan.route_id, plan.edition) if plan is not None else None,
+            current_leg_from_waypoint_id=leg_from if plan is not None else None,
+            authority_level_in_force=self.authority.level,
+            conn_held=self.conn_held,
+            degraded_inputs=tuple(degraded),
         )

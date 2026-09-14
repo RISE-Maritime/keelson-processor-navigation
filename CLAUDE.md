@@ -7,8 +7,9 @@ monitoring, traffic and CPA, COLREG advice, guidance, the navigation state machi
 decision log. One repo and image, one `source_id` per module (`{source_base}/{module}`).
 
 **Status:** Phases 1 and 2 done (verified live against Slipway `slipway-alpha` and in Crowsnest).
-Phase 3, the advisory COLREG advisor, is code complete and accepted against Slipway's
-`rivo-crossing` replayed from a fixture. Commands nothing.
+Phase 3, the advisory COLREG advisor, is accepted against Slipway's `rivo-crossing` replayed from a
+fixture. Phase 4, guidance and the conduct state machine, commands a vessel over
+`vehicle_control/v1`; accepted in-process on Slipway's kernel, not yet run on a shared bus.
 
 ## Where to look
 
@@ -38,6 +39,13 @@ src/nav/
   colreg/           classify (Rules 13-19), risk (grades per context), synthesize (manoeuvres vs all
                     targets), records (payloads), advisor (encounter lifecycle, advice, alarms)
   conduct/state.py  NavigationState, mirrors docs/upstream/NavigationState.proto
+  conduct/lease.py  command_authority lease: book (receiver clock) and client (take/grant/heartbeat/release)
+  conduct/authority.py  OperationalAuthority.level gates
+  conduct/fsm.py    IDLE/READY/UNDERWAY/FALLBACK/ARRIVED/ENDED; pure, Gates in, Step out
+  guidance/         track (wheel-over, line of sight, PD helm), speed, axes (mapping ownership,
+                    Actuation), failsafe, guide (orders + navigation_setpoint)
+  log/decision_log.py  navigation_decision append + periodic restatement
+  bus/vehicle_control.py  HelmBackend: axis timer and mapping RPCs, the only thing that drives
 ```
 
 ## Commands
@@ -47,6 +55,9 @@ src/nav/
 .venv/bin/ruff check bin/ src/ tests/ && .venv/bin/ruff format --check bin/ src/ tests/
 .venv/bin/navigation --config config/processor.yaml --connect tcp/localhost:7447
 docker compose up --build
+# Slipway acceptance (Slipway's env; skipped in this venv):
+cd ../SLIPWAY && PYTHONPATH=../keelson-processor-navigation/src:../keelson-processor-navigation \
+  .venv/bin/python -m pytest ../keelson-processor-navigation/tests/test_acceptance_slipway_guidance.py
 ```
 
 ## Conventions
@@ -63,5 +74,13 @@ docker compose up --build
   A regeneration against an unchanged trajectory must be byte-identical.
 - keelson SDK is the monorepo one (`../keelson/sdks/python`), installed editable.
 - ruff, line length 100.
+- The tick never publishes axes. It leaves `Processor.actuation`; `bus/vehicle_control.py` repeats
+  it at 10-20 Hz and stops at `valid_until_ns`.
+- Pulling the lease must stop the vessel: after FALLBACK the processor never takes the conn back on
+  its own, only a grant naming it resumes. `tests/test_fsm.py` holds the matrix.
+- `command_authority` and `command_request` go out under source_id = entity_id: Slipway subscribes
+  `command_authority/*`, one chunk.
+- A control loop on a Slipway L0 hull has no inertia to hide behind: keep throttle and yaw-damping
+  loop gains below 1 (config refuses the throttle one).
 - Scripted edits must assert the old text exists. An unasserted replace that silently missed once
   published targets on the wrong keys; only the e2e test caught it.

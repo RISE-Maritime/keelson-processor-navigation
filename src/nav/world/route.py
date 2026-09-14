@@ -38,6 +38,7 @@ class WaypointPlan:
     planned_sog_knots: float | None = None
     radius_m: float | None = None
     leg: LegLimits | None = None
+    wheel_over_distance_m: float | None = None  # Waypoint.wheel_over_distance_m; None: derive it
     operational_context: str | None = None  # keelson.OperationalContext name; None when unspecified
 
 

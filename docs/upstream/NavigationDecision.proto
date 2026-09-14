@@ -1,0 +1,69 @@
+// DRAFT for keelson/messages/payloads. Not yet proposed upstream.
+//
+// Subject:  navigation_decision: keelson.NavigationDecision
+// Key:      {base_path}/@v0/{entity_id}/pubsub/navigation_decision/{voyage_id | "novoyage"}/{decision_id}
+// QoS:      elevated
+// Persist:  yes (append-only record; recent decisions are restated periodically for late joiners)
+//
+// Until keelson registers it, keelson-processor-navigation publishes the same field set as a
+// raw_json rider (record "navigation_decision"). src/nav/log/decision_log.py builds it and
+// tests/test_decision_log.py fails on drift.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "NavigationState.proto";       // Mode
+import "OperationalAuthority.proto";  // AuthorityLevel
+
+package keelson;
+
+// One decision the navigation function took, with what it knew when it took it.
+//
+// Append-only. A restatement repeats a decision already published with `restated = true` and the
+// same `decision_id`; it never changes one.
+message NavigationDecision {
+
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_MODE_TRANSITION = 1;
+    KIND_CONN_TAKEN = 2;       // took a free conn
+    KIND_CONN_GRANTED = 3;     // adopted a grant naming this controller
+    KIND_CONN_LOST = 4;        // the lease lapsed, was released or went to another controller
+    KIND_CONN_RELEASED = 5;
+    KIND_CONN_REQUESTED = 6;
+    KIND_MAPPING_INSTALLED = 7;
+    KIND_MAPPING_REFUSED = 8;  // the vehicle_control mapping belonged to someone else
+    KIND_MAPPING_RELEASED = 9;
+    KIND_ADVICE_ACCEPTED = 10;
+  }
+
+  message Ownship {
+    double latitude_deg = 1;
+    double longitude_deg = 2;
+    optional float heading_deg = 3;
+    optional float course_over_ground_deg = 4;
+    optional float sog_mps = 5;
+  }
+
+  google.protobuf.Timestamp timestamp = 1;
+  string decision_id = 2;
+  optional string voyage_id = 3;
+  Kind kind = 4;
+  // The source that decided, e.g. "navigation/0/conduct".
+  string decided_by = 5;
+  // For operators and logs; consumers MUST NOT parse either.
+  string summary = 6;
+  string reason = 7;
+
+  optional NavigationState.Mode mode_before = 10;
+  optional NavigationState.Mode mode_after = 11;
+  optional Ownship ownship = 12;
+  optional string advice_id = 13;
+  repeated string encounter_ids = 14;
+  OperationalAuthority.AuthorityLevel authority_level_in_force = 15;
+  bool conn_held = 16;
+
+  optional string policy_id = 20;
+
+  bool restated = 30;
+}

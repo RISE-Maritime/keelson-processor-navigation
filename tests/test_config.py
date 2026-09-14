@@ -58,7 +58,9 @@ def test_file_then_cli_precedence(tmp_path):
     assert conf["realm"] == "file-realm"
 
 
-def test_unimplemented_module_is_refused(tmp_path):
+def test_unimplemented_module_is_refused(tmp_path, monkeypatch):
+    # Every module is implemented since Phase 4; the refusal still has to hold for the next one.
+    monkeypatch.setattr(config_mod, "IMPLEMENTED_MODULES", frozenset({"conduct"}))
     f = tmp_path / "c.yaml"
     f.write_text("entity_id: v\nmodules:\n  guidance: true\n")
     with pytest.raises(config_mod.ConfigError, match="not implemented"):

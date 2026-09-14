@@ -78,3 +78,34 @@ riders:
     retire_when:
       subject: advice_disposition
       status: awaiting_upstream
+
+  - record: navigation_setpoint
+    module: guidance
+    message: keelson.NavigationSetpoint
+    draft_proto: docs/upstream/NavigationSetpoint.proto
+    upstream:
+      checked_version: "keelson dev @ 7b2438d"
+      checked_date: "2026-09-14"
+      citation: >-
+        subjects.yaml has the actuator values (joystick_x_pct, joystick_y_pct, wheel_position_pct)
+        and vehicle_navigation/v1 targets, which are the commands themselves. Nothing records the
+        setpoint behind them: the course and speed guidance aimed for, the leg, and the advice it
+        executed. docs/PLAN.md §3.
+    retire_when:
+      subject: navigation_setpoint
+      status: awaiting_upstream
+
+  - record: navigation_decision
+    module: decision_log
+    message: keelson.NavigationDecision
+    draft_proto: docs/upstream/NavigationDecision.proto
+    upstream:
+      checked_version: "keelson dev @ 7b2438d"
+      checked_date: "2026-09-14"
+      citation: >-
+        subjects.yaml has command_authority and command_request (the lease itself) and alarm, and
+        no append-only record of a navigation decision with its inputs: why a mode changed, the
+        conn was taken or lost, or advice was accepted. docs/PLAN.md §3.
+    retire_when:
+      subject: navigation_decision
+      status: awaiting_upstream

@@ -16,6 +16,11 @@ keelson SDK registers any of them, which is the signal to switch `codec: proto` 
   40° to starboard". Advice is a record, never a command, so the advisor cannot hold the conn by
   construction.
 
+- **`navigation_setpoint`, `navigation_decision`** (added with Phase 4 guidance; not yet in
+  RISE-Maritime/keelson#260): the vehicle interfaces carry the commands themselves, joystick axes or
+  goto targets. Nothing records the course and speed behind them, or why a mode changed, the conn
+  was taken or advice was accepted, so a recording cannot explain what the vessel was told.
+
 ## `messages/subjects.yaml`
 
 ```yaml
@@ -24,6 +29,8 @@ navigation_state:                       keelson.NavigationState    # What the na
 encounter:                              keelson.Encounter          # One vessel-to-vessel encounter, restated until it closes
 navigation_advice:                      keelson.NavigationAdvice   # A record of advised action, never a command
 advice_disposition:                     keelson.AdviceDisposition  # Accepted / rejected / superseded / expired, and by whom
+navigation_setpoint:                    keelson.NavigationSetpoint # What guidance ordered and why, never the command itself
+navigation_decision:                    keelson.NavigationDecision # Append-only record of a navigation decision and its inputs
 ```
 
 ## `messages/qos.yaml`
@@ -33,6 +40,8 @@ advice_disposition:                     keelson.AdviceDisposition  # Accepted / 
   encounter: elevated
   navigation_advice: elevated
   advice_disposition: elevated
+  navigation_setpoint: elevated
+  navigation_decision: elevated
 ```
 
 ## Keys and persistence
@@ -43,6 +52,8 @@ advice_disposition:                     keelson.AdviceDisposition  # Accepted / 
 | `encounter` | `encounter/{voyage_id or novoyage}/{encounter_id}` | yes, restated in full until closed |
 | `navigation_advice` | `navigation_advice/{voyage_id or novoyage}/{advice_id}` | yes |
 | `advice_disposition` | `advice_disposition/{voyage_id or novoyage}/{advice_id}` | yes, last disposition per advice |
+| `navigation_setpoint` | `navigation_setpoint/{source_id}` | no, an evidence stream |
+| `navigation_decision` | `navigation_decision/{voyage_id or novoyage}/{decision_id}` | yes, append-only |
 
 Every id is a single key token, so `.../encounter/*/*` storage covers the tree.
 
@@ -383,5 +394,167 @@ message AdviceDisposition {
 
   // Free text. Consumers MUST NOT parse it.
   string reason = 8;
+}
+```
+
+## `messages/payloads/NavigationSetpoint.proto`
+
+```proto
+// DRAFT for keelson/messages/payloads. Not yet proposed upstream.
+//
+// Subject:  navigation_setpoint: keelson.NavigationSetpoint
+// Key:      {base_path}/@v0/{entity_id}/pubsub/navigation_setpoint/{source_id}
+// QoS:      elevated
+// Persist:  no (evidence stream, 1-10 Hz while guidance commands)
+//
+// Until keelson registers it, keelson-processor-navigation publishes the same field set as a
+// raw_json rider (record "navigation_setpoint"). src/nav/guidance/guide.py builds it and
+// tests/test_guidance.py fails on drift.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "Route.proto";  // RouteRef
+
+package keelson;
+
+// What navigation guidance ordered, and why: the setpoint and the actuator values it became.
+//
+// A record, not a command. The command is whatever the backend publishes on the vehicle
+// interfaces (joystick axes on vehicle_control/v1, or a vehicle_navigation/v1 target). This lets a
+// recording show the intent behind those values without reverse-engineering a controller.
+message NavigationSetpoint {
+
+  enum Purpose {
+    PURPOSE_UNSPECIFIED = 0;
+    PURPOSE_TRACK = 1;             // following the planned track
+    PURPOSE_AVOIDING = 2;          // executing accepted collision-avoidance advice
+    PURPOSE_FAILSAFE_NEUTRAL = 3;  // neutral burst before going silent
+  }
+
+  enum Backend {
+    BACKEND_UNSPECIFIED = 0;
+    BACKEND_VEHICLE_CONTROL_AXES = 1;  // vehicle_control/v1 steering and throttle axes
+    BACKEND_VEHICLE_NAVIGATION = 2;    // vehicle_navigation/v1 targets and cruise speed
+  }
+
+  // The frame is the oneof field, as in SteeringOrder / PropulsionOrder.
+  message SteeringSetpoint {
+    oneof frame {
+      float course_over_ground_deg = 1;
+      float heading_deg = 2;
+    }
+  }
+
+  message PropulsionSetpoint {
+    oneof frame {
+      float sog_mps = 1;
+      float stw_mps = 2;
+    }
+  }
+
+  // Backend A's axis values, in the units the axes carry.
+  message Actuation {
+    float steering_pct = 1;           // [-100, 100], positive is starboard
+    float throttle_pct = 2;           // [-100, 100], positive is ahead
+    optional float heading_deg = 3;   // the heading the steering order aims for
+  }
+
+  google.protobuf.Timestamp timestamp = 1;
+  optional string voyage_id = 2;
+  optional RouteRef route_ref = 3;
+  Purpose purpose = 4;
+
+  // The leg being steered for, by stable waypoint id. Guidance may be on the next leg before
+  // route_execution is, because it turns at the wheel-over point.
+  optional string from_waypoint_id = 5;
+  optional string to_waypoint_id = 6;
+  // Cross-track error guidance steered on, positive to starboard of the leg.
+  optional float cross_track_error_m = 7;
+
+  SteeringSetpoint steering = 10;
+  PropulsionSetpoint propulsion = 11;
+  Backend backend = 12;
+  Actuation actuation = 13;
+
+  // Set when the setpoint executes accepted advice.
+  optional string source_advice_id = 14;
+
+  // Why this speed and course. For operators and logs; consumers MUST NOT parse it.
+  string reason = 15;
+}
+```
+
+## `messages/payloads/NavigationDecision.proto`
+
+```proto
+// DRAFT for keelson/messages/payloads. Not yet proposed upstream.
+//
+// Subject:  navigation_decision: keelson.NavigationDecision
+// Key:      {base_path}/@v0/{entity_id}/pubsub/navigation_decision/{voyage_id | "novoyage"}/{decision_id}
+// QoS:      elevated
+// Persist:  yes (append-only record; recent decisions are restated periodically for late joiners)
+//
+// Until keelson registers it, keelson-processor-navigation publishes the same field set as a
+// raw_json rider (record "navigation_decision"). src/nav/log/decision_log.py builds it and
+// tests/test_decision_log.py fails on drift.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "NavigationState.proto";       // Mode
+import "OperationalAuthority.proto";  // AuthorityLevel
+
+package keelson;
+
+// One decision the navigation function took, with what it knew when it took it.
+//
+// Append-only. A restatement repeats a decision already published with `restated = true` and the
+// same `decision_id`; it never changes one.
+message NavigationDecision {
+
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_MODE_TRANSITION = 1;
+    KIND_CONN_TAKEN = 2;       // took a free conn
+    KIND_CONN_GRANTED = 3;     // adopted a grant naming this controller
+    KIND_CONN_LOST = 4;        // the lease lapsed, was released or went to another controller
+    KIND_CONN_RELEASED = 5;
+    KIND_CONN_REQUESTED = 6;
+    KIND_MAPPING_INSTALLED = 7;
+    KIND_MAPPING_REFUSED = 8;  // the vehicle_control mapping belonged to someone else
+    KIND_MAPPING_RELEASED = 9;
+    KIND_ADVICE_ACCEPTED = 10;
+  }
+
+  message Ownship {
+    double latitude_deg = 1;
+    double longitude_deg = 2;
+    optional float heading_deg = 3;
+    optional float course_over_ground_deg = 4;
+    optional float sog_mps = 5;
+  }
+
+  google.protobuf.Timestamp timestamp = 1;
+  string decision_id = 2;
+  optional string voyage_id = 3;
+  Kind kind = 4;
+  // The source that decided, e.g. "navigation/0/conduct".
+  string decided_by = 5;
+  // For operators and logs; consumers MUST NOT parse either.
+  string summary = 6;
+  string reason = 7;
+
+  optional NavigationState.Mode mode_before = 10;
+  optional NavigationState.Mode mode_after = 11;
+  optional Ownship ownship = 12;
+  optional string advice_id = 13;
+  repeated string encounter_ids = 14;
+  OperationalAuthority.AuthorityLevel authority_level_in_force = 15;
+  bool conn_held = 16;
+
+  optional string policy_id = 20;
+
+  bool restated = 30;
 }
 ```

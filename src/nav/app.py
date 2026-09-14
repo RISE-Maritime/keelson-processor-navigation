@@ -12,7 +12,7 @@ from . import config as config_mod
 
 logger = logging.getLogger(__name__)
 
-_MAX_CACHED_PUBLISHERS = 8
+_MAX_CACHED_PUBLISHERS = 16
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -129,9 +129,18 @@ def run(session, conf: dict, stop) -> None:
             need_routes=processor.needs_routes,
             need_targets=processor.needs_targets,
             need_dispositions=processor.needs_dispositions,
+            need_leases=processor.needs_leases,
         )
         stack.callback(inputs.close)
         inputs.start()
+
+        helm = None
+        if processor.guidance is not None:
+            from .bus.vehicle_control import HelmBackend
+
+            helm = HelmBackend(session, conf, processor.world)
+            stack.callback(helm.close)
+            helm.start()
 
         period = 1.0 / conf["tick_hz"]
         deadline = time.monotonic()
@@ -152,6 +161,8 @@ def run(session, conf: dict, stop) -> None:
                         publishers.put(key(wire, source_id), wire, data)
                 except Exception:
                     logger.exception("Failed to publish %s from %s", out.subject, out.module)
+            if helm is not None:
+                helm.apply(processor.actuation)
             tokens.set({key(s, src) for s, src in processor.dynamic_keys()})
 
             deadline += period

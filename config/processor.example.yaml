@@ -36,6 +36,7 @@ inputs:
   heading_true_north_deg: sim
   course_over_ground_deg: sim
   speed_over_ground_knots: sim
+  yaw_rate_degps: sim             # guidance damps its helm with it when present
   # roll_deg:
   # true_wind_speed_mps:
   # true_wind_speed_max_mps:
@@ -91,3 +92,51 @@ colreg:
   speed_factors: [0.5, 0.25]
   horizon_s: 1800
   alarms: true
+
+conduct:
+  # The conn is keelson's command_authority lease, judged on this receiver's own clock. It is
+  # published under source_id = entity_id, as Crowsnest publishes it and Slipway listens for it.
+  controller_id: null              # default "{source_base}@{entity_id}"
+  controller_site: onboard
+  lease_ttl_s: 30
+  heartbeat_s: 10
+  request_conn: false              # publish command_request while READY without the conn
+  request_interval_s: 10
+  take_conn_when_free: false       # take a conn nobody holds. Never after FALLBACK: resuming needs a grant
+  authority_source: null           # operational_authority source; without one the level is UNKNOWN and guidance never drives
+  authority_max_age_s: 10
+  fixed_authority_level: null      # software-in-the-loop only, e.g. AUTHORITY_LEVEL_REMOTE_CONTROLLED; stated in every navigation_state
+  auto_accept_advice: false        # accept colreg advice: ASSISTED_AUTONOMOUS below DANGER, FULL_AUTONOMOUS always
+
+guidance:
+  # Drives vehicle_control/v1 steering and throttle (joystick_x_pct, joystick_y_pct). A vessel has one
+  # control mapping and the last writer wins: never enable this where keelson-processor-autopilot runs.
+  backend: axes
+  responder_id: "*"                # vehicle_control/v1 responder: "sim" for Slipway, "mav/0" for mavlink2keelson
+  publish_hz: 10                   # 10-20, as vehicle_control/v1 requires
+  command_hold_s: 0.5              # axes stop this long after the last tick, so a stalled loop goes silent
+  neutral_burst_s: 2               # on FALLBACK or arrival: neutral axes this long, then silence
+  max_axis_age_s: 1                # the dead-man asked of the vehicle
+  mapping_poll_s: 2
+  mapping_max_age_s: 6
+  rpc_timeout_s: 2
+  setpoint_hz: 2                   # navigation_setpoint rate while guidance commands
+  full_ahead_sog_knots: null       # REQUIRED with guidance: the hull's speed at 100 % throttle
+  default_sog_knots: 6             # when a leg plans no speed
+  arrival_sog_knots: 2
+  arrival_slowdown_m: 300
+  restricted_visibility_factor: 0.5
+  throttle_kp_pct_per_knot: 1      # kp * full_ahead_sog_knots / 100 must stay below 1
+  predict_s: 5                     # cross-track error is taken this far ahead
+  lookahead_s: 20                  # line of sight: max(min_lookahead_m, SOG * lookahead_s)
+  min_lookahead_m: 100
+  max_intercept_deg: 45
+  default_turn_radius_m: 200       # wheel-over when a waypoint authors neither radius_m nor wheel_over_distance_m
+  heading_kp_pct_per_deg: 2
+  yaw_kd_pct_per_degps: 2          # kd * the hull's full-helm turn rate / 100 must stay below 1
+  max_drift_deg: 30
+  min_sog_for_drift_knots: 1
+
+decision_log:
+  snapshot_s: 30                   # restate recent decisions this often
+  snapshot_count: 20

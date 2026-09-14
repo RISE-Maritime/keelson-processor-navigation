@@ -132,6 +132,27 @@ class Advisor:
     def record_disposition(self, record: DispositionRecord) -> None:
         self.dispositions[record.advice_id] = record
 
+    def accepted_advice(self, now_ns: int) -> AdviceRecord | None:
+        """The active advice, when an ACCEPTED disposition licenses acting on it now: an avoiding
+        kind, accepted by someone, and inside its validity window. Otherwise None."""
+        a = self._advice
+        if a is None or now_ns > a.valid_to_ns or a.record.kind not in AVOIDING_KINDS:
+            return None
+        d = self.dispositions.get(a.record.advice_id)
+        return a.record if d is not None and d.state == "STATE_ACCEPTED" else None
+
+    def undecided_advice(self, now_ns: int) -> AdviceRecord | None:
+        """The active avoiding advice that nobody has disposed of yet, inside its validity."""
+        a = self._advice
+        if a is None or now_ns > a.valid_to_ns or a.record.kind not in AVOIDING_KINDS:
+            return None
+        return None if a.record.advice_id in self.dispositions else a.record
+
+    def worst_risk(self, advice: AdviceRecord) -> str | None:
+        """The highest current risk among the encounters an advice answers, as a proto name."""
+        risks = [e.risk for e in self._open.values() if e.encounter_id in advice.encounter_ids]
+        return max(risks).proto_name if risks else None
+
     def step(
         self,
         now_ns: int,

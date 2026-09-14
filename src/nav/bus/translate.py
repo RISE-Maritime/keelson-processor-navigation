@@ -49,6 +49,7 @@ def route_plan(route) -> RoutePlan:
                 name=w.name,
                 planned_sog_knots=_opt(w, "planned_sog_knots"),
                 radius_m=_opt(w, "radius_m"),
+                wheel_over_distance_m=_opt(w, "wheel_over_distance_m"),
                 leg=_leg(w.leg) if w.HasField("leg") else None,
                 operational_context=_enum_name(w, "operational_context"),
             )

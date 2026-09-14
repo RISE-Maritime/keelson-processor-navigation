@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import time
 
+from ..world.latch import Sample
 from ..world.model import World
 from ..world.targets import TARGET_SUBJECTS
 from . import translate
@@ -39,6 +40,7 @@ class Inputs:
         need_routes: bool,
         need_targets: bool = False,
         need_dispositions: bool = False,
+        need_leases: bool = False,
         clock=time.time_ns,
     ):
         self.session = session
@@ -47,6 +49,7 @@ class Inputs:
         self.need_routes = need_routes
         self.need_targets = need_targets
         self.need_dispositions = need_dispositions
+        self.need_leases = need_leases
         self.clock = clock
         self._subscribers = []
         self._warned: set[str] = set()
@@ -66,6 +69,14 @@ class Inputs:
             self._subscribe(route_key, lambda s: self._on_route(s, live=True))
         for subject, source in sorted(self.conf["inputs"].items()):
             self._subscribe(self._key(subject, source), self._input_handler(subject))
+        if self.need_leases:
+            # The lease rides source_id = the vessel id (Crowsnest's convention), but any source
+            # that publishes one is heard: a lease this receiver ignores cannot lapse for it.
+            key = self._key("command_authority", "**")
+            self._subscribe(key, self._on_lease, label=key)
+            source = self.conf["conduct"]["authority_source"]
+            if source:
+                self._subscribe(self._key("operational_authority", source), self._on_authority)
         if self.need_dispositions:
             wire = "raw_json" if self.conf["codec"] == "rider" else "advice_disposition"
             key = self._key(wire, "**")
@@ -190,6 +201,28 @@ class Inputs:
             )
 
         return handle
+
+    def _on_lease(self, sample) -> None:
+        from google.protobuf import json_format
+
+        message = self._decode(sample, "command_authority")
+        payload = json_format.MessageToDict(message, preserving_proto_field_name=True)
+        self.world.put_lease(payload, self.clock())
+
+    def _on_authority(self, sample) -> None:
+        message = self._decode(sample, "operational_authority")
+        levels = message.DESCRIPTOR.fields_by_name["level"].enum_type.values_by_number
+        level = levels.get(message.level)
+        tail = pubsub_tail(str(sample.key_expr))
+        self.world.inputs.put(
+            "operational_authority",
+            Sample(
+                level.name if level else "AUTHORITY_LEVEL_UNKNOWN",
+                self.clock(),
+                translate._measured_ns(message),
+                "/".join(tail[1]) if tail else "",
+            ),
+        )
 
     def _input_handler(self, subject: str):
         def handle(sample):

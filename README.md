@@ -3,20 +3,23 @@
 A [keelson](https://github.com/RISE-Maritime/keelson) processor that owns navigation of an
 autonomous vessel (MASS, USV) while it is under automation.
 
-> **Status: Phase 3, COLREG advisor.** It monitors the vessel's route, tracks traffic with CPA,
-> and classifies encounters under COLREG Rules 13 to 19, publishing encounters, advice and what
-> became of each advice. **It commands nothing**: advice is a record, and acting on it is Phase 4,
-> after someone accepts it. See [TODO.md](TODO.md) and [docs/PLAN.md](docs/PLAN.md).
+> **Status: Phase 4, guidance and conduct.** It monitors the vessel's route, tracks traffic with
+> CPA, and classifies encounters under COLREG Rules 13 to 19. With `guidance` enabled it also
+> **commands the vessel** over `vehicle_control/v1`, but only while it holds the conn, the
+> operational authority level allows driving, own-ship inputs are fresh and the control mapping is
+> free or its own. Accepted on Slipway's kernel in-process; not yet run on a shared bus. Advice
+> stays a record: guidance acts on it only once accepted. See [TODO.md](TODO.md) and
+> [docs/PLAN.md](docs/PLAN.md).
 
-## What it will do
+## What it does
 
 | Module | Role | Output |
 |---|---|---|
 | `route_monitor` | Tracks the active voyage against its pinned route edition | `route_execution`, `envelope_exceedance` |
 | `traffic` | Target table from `@target` trees, CPA and TCPA | `target_cpa_m`, `target_tcpa_s`, … |
 | `colreg` | Classifies encounters and proposes manoeuvres. Advice only, never a command | `encounter`, `navigation_advice` |
-| `guidance` | Steers along the track and executes accepted advice | `vehicle_control/v1` axes or `vehicle_navigation/v1` |
-| `conduct` | Navigation state machine gated on the conn and operational authority | `navigation_state` |
+| `guidance` | Steers along the track and executes accepted advice | `vehicle_control/v1` axes, `navigation_setpoint` |
+| `conduct` | Navigation state machine gated on the conn and operational authority | `navigation_state`, `command_authority`, `command_request` |
 | `decision_log` | Append-only record of every navigation decision | `navigation_decision` |
 
 Each module publishes under its own source id, `{source_base}/{module}`.
@@ -96,13 +99,55 @@ protobuf JSON form of a draft proto in [docs/upstream/](docs/upstream/). The reg
 [src/nav/contracts/raw_json_riders.yaml](src/nav/contracts/raw_json_riders.yaml). Once keelson
 registers a subject, `codec: proto` publishes it typed with no other change.
 
+## What conduct and guidance read and write
+
+| Direction | Key under `{realm}/@v0/{entity_id}/` | Notes |
+|---|---|---|
+| in | `pubsub/command_authority/**` | The conn. Lapses `lease_ttl_seconds` after the last message *this* receiver heard; `expires_at` is never compared with a local clock |
+| in | `pubsub/operational_authority/{conduct.authority_source}` | Only `level` is read, never `composite_score`. None heard, or stale, is `UNKNOWN`, which never drives |
+| rpc | `@rpc/vehicle_control/v1/get_control_mapping/{guidance.responder_id}` | Polled every `mapping_poll_s` |
+| rpc | `@rpc/vehicle_control/v1/set_control_mapping/{guidance.responder_id}` | Installs `steering` from `joystick_x_pct` and `throttle` from `joystick_y_pct`, only when the vehicle reports an empty mapping |
+| out | `pubsub/command_authority/{entity_id}`, `pubsub/command_request/{entity_id}` | Take, heartbeat, release; request. Under the vessel id as source, the convention Crowsnest and Slipway use |
+| out | `pubsub/joystick_x_pct/navigation/0/guidance`, `pubsub/joystick_y_pct/navigation/0/guidance` | Both axes together at `publish_hz` (10-20 Hz) from their own timer. Positive steering is starboard |
+| out | `pubsub/raw_json/navigation/0/guidance`, record `navigation_setpoint` | Course, speed, leg, cross-track error and the axis values behind them |
+| out | `pubsub/raw_json/navigation/0/decision_log`, record `navigation_decision` | Mode changes, conn taken, granted, lost or released, mapping installed or refused, advice accepted. Recent decisions restated every 30 s |
+
+What the state machine guarantees:
+
+- **UNDERWAY** needs the conn, a level of `REMOTE_CONTROLLED` or above, fresh position, heading,
+  course and speed, and a control mapping that is free or already this processor's. Another
+  controller's mapping is reported, never overwritten.
+- **Losing any of them** is FALLBACK: neutral axes for `neutral_burst_s`, then silence, so the
+  vehicle's dead-man stops the hull. Arrival does the same, then releases the conn.
+- **Pulling the lease stops the vessel.** After a FALLBACK the processor does not take the conn
+  back, even with `take_conn_when_free`; only a grant naming it resumes.
+- **A stalled tick loop goes silent.** Axes are repeated only until `command_hold_s` after the
+  last tick.
+
 ## Deployment
 
-Guidance (Phase 4, not yet built) will drive a vessel through `vehicle_control/v1`. A vessel has one
-control mapping and the last writer wins, so this processor must not share a vessel with
-`keelson-processor-autopilot`, which re-installs its mapping whenever the helm is free. Stop the
-autopilot container on any vessel this processor steers. Monitoring, traffic and advice alone are
-safe beside it: they command nothing.
+A vessel has one control mapping and the last writer wins, so with `guidance` enabled this processor
+must not share a vessel with `keelson-processor-autopilot`, which re-installs its mapping whenever
+the helm is free. Stop the autopilot container on any vessel this processor steers. Monitoring,
+traffic, advice and conduct without guidance are safe beside it: they command nothing.
+
+[config/slipway-alpha-guidance.yaml](config/slipway-alpha-guidance.yaml) sails Slipway's
+`slipway-alpha` on scenario `alpha-navigation`. It fixes the authority level because Slipway runs no
+authority aggregator, which is acceptable in simulation only.
+
+## Acceptance against Slipway
+
+`tests/test_acceptance_slipway_guidance.py` runs Slipway's kernel in-process on `two-vessel-harbor`
+with alpha in COMMANDED mode: guidance sails her circuit inside the leg's cross-track limit, pulling
+the lease stops her within the neutral burst and dead-man, and a stalled processor is caught by the
+kernel's dead-man. It needs Slipway's environment, so it is skipped in this repo's own:
+
+```bash
+cd ../SLIPWAY
+NAV=../keelson-processor-navigation
+PYTHONPATH=$NAV/src:$NAV .venv/bin/python -m pytest -p no:cacheprovider \
+    $NAV/tests/test_acceptance_slipway_guidance.py
+```
 
 ## Container
 

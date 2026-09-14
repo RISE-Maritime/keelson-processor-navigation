@@ -39,6 +39,9 @@ class World:
         self._declared: dict[str, Declared] = {}
         self._rejected: dict[str, str] = {}
         self._dispositions: list[dict] = []
+        self._leases: list[tuple[dict, int]] = []
+        self._helm: tuple[dict | None, int] | None = None
+        self._helm_events: list[tuple[str, str]] = []
         self.inputs = Latch()
         self.targets = TargetTable()
 
@@ -66,6 +69,34 @@ class World:
     def take_dispositions(self) -> list[dict]:
         with self._lock:
             out, self._dispositions = self._dispositions, []
+        return out
+
+    def put_lease(self, payload: dict, received_ns: int) -> None:
+        """A command_authority message, as its payload dict, stamped with local receipt time."""
+        with self._lock:
+            self._leases.append((payload, received_ns))
+
+    def take_leases(self) -> list[tuple[dict, int]]:
+        with self._lock:
+            out, self._leases = self._leases, []
+        return out
+
+    def put_helm(self, mapping: dict | None, received_ns: int) -> None:
+        """The vehicle_control mapping as last read (protobuf JSON); None when nobody answered."""
+        with self._lock:
+            self._helm = (mapping, received_ns)
+
+    def helm(self) -> tuple[dict | None, int] | None:
+        with self._lock:
+            return self._helm
+
+    def put_helm_event(self, kind: str, detail: str) -> None:
+        with self._lock:
+            self._helm_events.append((kind, detail))
+
+    def take_helm_events(self) -> list[tuple[str, str]]:
+        with self._lock:
+            out, self._helm_events = self._helm_events, []
         return out
 
     def reject(self, key: str, reason: str) -> None:

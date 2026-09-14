@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 MODULES = ("route_monitor", "traffic", "colreg", "guidance", "conduct", "decision_log")
 
 # Enabling any other module is refused, never ignored.
-IMPLEMENTED_MODULES = frozenset({"conduct", "route_monitor", "traffic", "colreg"})
+IMPLEMENTED_MODULES = frozenset(
+    {"conduct", "route_monitor", "traffic", "colreg", "guidance", "decision_log"}
+)
 
 CODECS = ("rider", "proto")
 
@@ -26,11 +28,18 @@ OWNSHIP_INPUTS = (
     "heading_true_north_deg",
     "course_over_ground_deg",
     "speed_over_ground_knots",
+    "yaw_rate_degps",
 )
 REQUIRED_INPUTS = {
     "route_monitor": ("location_fix",),
     "traffic": ("location_fix",),
     "colreg": ("location_fix", "course_over_ground_deg", "speed_over_ground_knots"),
+    "guidance": (
+        "location_fix",
+        "heading_true_north_deg",
+        "course_over_ground_deg",
+        "speed_over_ground_knots",
+    ),
 }
 
 ROUTE_MONITOR_DEFAULTS = {
@@ -76,6 +85,53 @@ COLREG_DEFAULTS = {
     "alarms": True,
 }
 
+CONDUCT_DEFAULTS = {
+    "controller_id": None,  # None: "{source_base}@{entity_id}"
+    "controller_site": "onboard",
+    "lease_ttl_s": 30.0,
+    "heartbeat_s": 10.0,
+    "request_conn": False,
+    "request_interval_s": 10.0,
+    "take_conn_when_free": False,
+    "authority_source": None,
+    "authority_max_age_s": 10.0,
+    "fixed_authority_level": None,
+    "auto_accept_advice": False,
+}
+
+GUIDANCE_DEFAULTS = {
+    "backend": "axes",
+    "responder_id": "*",
+    "publish_hz": 10.0,
+    "command_hold_s": 0.5,
+    "neutral_burst_s": 2.0,
+    "max_axis_age_s": 1.0,
+    "mapping_poll_s": 2.0,
+    "mapping_max_age_s": 6.0,
+    "rpc_timeout_s": 2.0,
+    "setpoint_hz": 2.0,
+    "full_ahead_sog_knots": None,
+    "default_sog_knots": 6.0,
+    "arrival_sog_knots": 2.0,
+    "arrival_slowdown_m": 300.0,
+    "restricted_visibility_factor": 0.5,
+    "throttle_kp_pct_per_knot": 1.0,
+    "predict_s": 5.0,
+    "lookahead_s": 20.0,
+    "min_lookahead_m": 100.0,
+    "max_intercept_deg": 45.0,
+    "default_turn_radius_m": 200.0,
+    "heading_kp_pct_per_deg": 2.0,
+    "yaw_kd_pct_per_degps": 2.0,
+    "max_drift_deg": 30.0,
+    "min_sog_for_drift_knots": 1.0,
+}
+
+DECISION_LOG_DEFAULTS = {
+    "snapshot_s": 30.0,
+    "snapshot_count": 20,
+}
+
 DEFAULTS: dict = {
     "realm": "rise",
     "entity_id": None,
@@ -88,10 +144,21 @@ DEFAULTS: dict = {
     "route_monitor": dict(ROUTE_MONITOR_DEFAULTS),
     "traffic": copy.deepcopy(TRAFFIC_DEFAULTS),
     "colreg": copy.deepcopy(COLREG_DEFAULTS),
+    "conduct": dict(CONDUCT_DEFAULTS),
+    "guidance": dict(GUIDANCE_DEFAULTS),
+    "decision_log": dict(DECISION_LOG_DEFAULTS),
 }
 
 _CLI_OVERRIDES = ("realm", "entity_id", "source_base", "codec")
-_MERGED_SECTIONS = ("modules", "route_monitor", "traffic", "colreg")
+_MERGED_SECTIONS = (
+    "modules",
+    "route_monitor",
+    "traffic",
+    "colreg",
+    "conduct",
+    "guidance",
+    "decision_log",
+)
 
 
 class ConfigError(ValueError):
@@ -145,6 +212,105 @@ def _validate(conf: dict) -> None:
     _validate_route_monitor(conf)
     _validate_traffic(conf)
     _validate_colreg(conf)
+    _validate_conduct(conf)
+    _validate_guidance(conf)
+    _validate_decision_log(conf)
+
+
+def _section(conf: dict, name: str, defaults: dict) -> dict:
+    section = conf.get(name)
+    if not isinstance(section, dict):
+        raise ConfigError(f"{name} must be a mapping")
+    unknown = set(section) - set(defaults)
+    if unknown:
+        raise ConfigError(f"unknown {name} setting(s): {sorted(unknown)}")
+    return section
+
+
+def _validate_conduct(conf: dict) -> None:
+    from .conduct.authority import LEVELS
+
+    cd = _section(conf, "conduct", CONDUCT_DEFAULTS)
+    if cd["controller_id"] is not None and (
+        not isinstance(cd["controller_id"], str) or not cd["controller_id"]
+    ):
+        raise ConfigError("conduct.controller_id must be a non-empty string or unset")
+    if not isinstance(cd["controller_site"], str):
+        raise ConfigError("conduct.controller_site must be a string")
+    for key in ("lease_ttl_s", "heartbeat_s", "request_interval_s", "authority_max_age_s"):
+        if not _positive(cd[key]):
+            raise ConfigError(f"conduct.{key} must be a positive number")
+    if cd["heartbeat_s"] >= cd["lease_ttl_s"]:
+        raise ConfigError("conduct.heartbeat_s must be shorter than conduct.lease_ttl_s")
+    for key in ("request_conn", "take_conn_when_free", "auto_accept_advice"):
+        if not isinstance(cd[key], bool):
+            raise ConfigError(f"conduct.{key} must be true or false")
+    source = cd["authority_source"]
+    if source is not None:
+        if not isinstance(source, str) or not source or "*" in source or "@" in source:
+            raise ConfigError("conduct.authority_source must name one source_id")
+        if _is_truth(source):
+            raise ConfigError("conduct.authority_source must not be simulator ground truth")
+    if cd["fixed_authority_level"] is not None and cd["fixed_authority_level"] not in LEVELS:
+        raise ConfigError(f"conduct.fixed_authority_level must be one of {list(LEVELS)}")
+    if cd["fixed_authority_level"] is not None and source is not None:
+        raise ConfigError("set conduct.authority_source or conduct.fixed_authority_level, not both")
+    if cd["auto_accept_advice"] and not (
+        conf["modules"].get("colreg") and conf["modules"].get("guidance")
+    ):
+        raise ConfigError("conduct.auto_accept_advice needs modules 'colreg' and 'guidance'")
+
+
+def _validate_guidance(conf: dict) -> None:
+    gd = _section(conf, "guidance", GUIDANCE_DEFAULTS)
+    if gd["backend"] != "axes":
+        raise ConfigError(
+            "guidance.backend must be 'axes' (vehicle_control/v1); vehicle_navigation is Phase 6"
+        )
+    if not isinstance(gd["responder_id"], str) or not gd["responder_id"]:
+        raise ConfigError("guidance.responder_id must be a non-empty string")
+    if not _positive(gd["publish_hz"]) or not 10 <= gd["publish_hz"] <= 20:
+        raise ConfigError("guidance.publish_hz must be 10-20: vehicle_control/v1 requires it")
+    for key in sorted(set(GUIDANCE_DEFAULTS) - {"backend", "responder_id", "full_ahead_sog_knots"}):
+        if not _positive(gd[key]):
+            raise ConfigError(f"guidance.{key} must be a positive number")
+    if gd["command_hold_s"] * gd["publish_hz"] < 2:
+        raise ConfigError("guidance.command_hold_s must span at least two axis publications")
+    if gd["command_hold_s"] >= gd["max_axis_age_s"]:
+        raise ConfigError("guidance.command_hold_s must be shorter than guidance.max_axis_age_s")
+    if gd["setpoint_hz"] > conf["tick_hz"]:
+        raise ConfigError("guidance.setpoint_hz cannot exceed tick_hz")
+    if gd["mapping_max_age_s"] <= gd["mapping_poll_s"]:
+        raise ConfigError("guidance.mapping_max_age_s must be longer than guidance.mapping_poll_s")
+    if gd["max_intercept_deg"] >= 90:
+        raise ConfigError("guidance.max_intercept_deg must be below 90")
+    if conf["modules"].get("guidance"):
+        if not _positive(gd["full_ahead_sog_knots"]):
+            raise ConfigError(
+                "module 'guidance' needs guidance.full_ahead_sog_knots: the hull's speed at 100 %"
+            )
+        if not conf["modules"].get("conduct"):
+            raise ConfigError("module 'guidance' needs module 'conduct': it drives only UNDERWAY")
+        if gd["throttle_kp_pct_per_knot"] * gd["full_ahead_sog_knots"] / 100.0 >= 1.0:
+            raise ConfigError(
+                "guidance.throttle_kp_pct_per_knot * full_ahead_sog_knots / 100 must be below 1: "
+                "a speed loop at gain 1 oscillates on a hull without inertia"
+            )
+
+
+def _validate_decision_log(conf: dict) -> None:
+    dl = _section(conf, "decision_log", DECISION_LOG_DEFAULTS)
+    if not _positive(dl["snapshot_s"]):
+        raise ConfigError("decision_log.snapshot_s must be a positive number")
+    if not isinstance(dl["snapshot_count"], int) or dl["snapshot_count"] < 1:
+        raise ConfigError("decision_log.snapshot_count must be a positive integer")
+    if conf["modules"].get("decision_log") and not conf["modules"].get("conduct"):
+        raise ConfigError("module 'decision_log' needs module 'conduct'")
+
+
+def controller_id(conf: dict) -> str:
+    """The id this processor holds the conn under."""
+    return conf["conduct"]["controller_id"] or f"{conf['source_base']}@{conf['entity_id']}"
 
 
 def _validate_inputs(conf: dict) -> None:
