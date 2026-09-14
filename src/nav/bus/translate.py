@@ -50,6 +50,7 @@ def route_plan(route) -> RoutePlan:
                 planned_sog_knots=_opt(w, "planned_sog_knots"),
                 radius_m=_opt(w, "radius_m"),
                 leg=_leg(w.leg) if w.HasField("leg") else None,
+                operational_context=_enum_name(w, "operational_context"),
             )
         )
     defaults = route.waypoints.defaults
@@ -63,6 +64,14 @@ def route_plan(route) -> RoutePlan:
         default_radius_m=_opt(defaults, "radius_m"),
         limits=RouteLimits(**{name: _opt(info, name) for name in RouteLimits.__dataclass_fields__}),
     )
+
+
+def _enum_name(msg, field_name: str) -> str | None:
+    number = getattr(msg, field_name)
+    if not number:
+        return None
+    value = msg.DESCRIPTOR.fields_by_name[field_name].enum_type.values_by_number.get(number)
+    return value.name if value else None
 
 
 def voyage_plan(voyage) -> VoyagePlan:

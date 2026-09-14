@@ -30,3 +30,51 @@ riders:
     retire_when:
       subject: navigation_state
       status: awaiting_upstream
+
+  - record: encounter
+    module: colreg
+    message: keelson.Encounter
+    draft_proto: docs/upstream/Encounter.proto
+    upstream:
+      checked_version: "keelson dev @ 3ecc656"
+      checked_date: "2026-09-14"
+      citation: >-
+        subjects.yaml has target_cpa_m / target_tcpa_s (numbers per target) and a plan-side
+        ColregSituation on Route.Leg, and nothing for a live encounter, an advice or its
+        disposition. crowsnest-dev docs/NAVIGATION-DECISION-SERVICES.md §6.1 asks for exactly this
+        family; the unmerged feature/standing-order-verb branch supplies the order shape only.
+    retire_when:
+      subject: encounter
+      status: awaiting_upstream
+
+  - record: navigation_advice
+    module: colreg
+    message: keelson.NavigationAdvice
+    draft_proto: docs/upstream/NavigationAdvice.proto
+    upstream:
+      checked_version: "keelson dev @ 3ecc656"
+      checked_date: "2026-09-14"
+      citation: >-
+        subjects.yaml has target_cpa_m / target_tcpa_s (numbers per target) and a plan-side
+        ColregSituation on Route.Leg, and nothing for a live encounter, an advice or its
+        disposition. crowsnest-dev docs/NAVIGATION-DECISION-SERVICES.md §6.1 asks for exactly this
+        family; the unmerged feature/standing-order-verb branch supplies the order shape only.
+    retire_when:
+      subject: navigation_advice
+      status: awaiting_upstream
+
+  - record: advice_disposition
+    module: colreg
+    message: keelson.AdviceDisposition
+    draft_proto: docs/upstream/AdviceDisposition.proto
+    upstream:
+      checked_version: "keelson dev @ 3ecc656"
+      checked_date: "2026-09-14"
+      citation: >-
+        subjects.yaml has target_cpa_m / target_tcpa_s (numbers per target) and a plan-side
+        ColregSituation on Route.Leg, and nothing for a live encounter, an advice or its
+        disposition. crowsnest-dev docs/NAVIGATION-DECISION-SERVICES.md §6.1 asks for exactly this
+        family; the unmerged feature/standing-order-verb branch supplies the order shape only.
+    retire_when:
+      subject: advice_disposition
+      status: awaiting_upstream

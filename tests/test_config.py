@@ -60,7 +60,7 @@ def test_file_then_cli_precedence(tmp_path):
 
 def test_unimplemented_module_is_refused(tmp_path):
     f = tmp_path / "c.yaml"
-    f.write_text("entity_id: v\nmodules:\n  colreg: true\n")
+    f.write_text("entity_id: v\nmodules:\n  guidance: true\n")
     with pytest.raises(config_mod.ConfigError, match="not implemented"):
         config_mod.load(ns(config=str(f)))
 

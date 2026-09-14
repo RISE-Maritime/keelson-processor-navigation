@@ -49,6 +49,7 @@ class TrafficMonitor:
         self._next_ns: int | None = None
         self._in_range: set[str] = set()
         self.status = TrafficStatus()
+        self.evaluated_at_ns: int | None = None  # set on every tick that re-evaluated traffic
 
     def step(self, world: WorldSnapshot, targets: dict[str, TargetView], now_ns: int) -> list[Emit]:
         if self._next_ns is not None and now_ns < self._next_ns:
@@ -57,6 +58,7 @@ class TrafficMonitor:
             self._next_ns = now_ns
         while self._next_ns <= now_ns:
             self._next_ns += self._period_ns
+        self.evaluated_at_ns = now_ns
 
         age = self.max_state_age_s
         position = fresh(world.inputs.get("location_fix"), now_ns, age)

@@ -22,7 +22,7 @@ state_hz: 1
 modules:
   route_monitor: true
   traffic: true
-  colreg: false
+  colreg: true
   guidance: false
   conduct: true
   decision_log: false
@@ -74,3 +74,20 @@ traffic:
   publish_hz: 1
   dead_reckon: true                # move each target along its reported velocity since receipt
   exclude_targets: []              # e.g. [mmsi_265000000], this vessel's own AIS
+
+colreg:
+  # ADVISORY ONLY. Publishes encounters, advice and dispositions; commands nothing.
+  # Thresholds come from the current leg's operational context; with no route, or a leg without one,
+  # this context is used. Built-in per-context values live in src/nav/colreg/risk.py.
+  default_context: OPERATIONAL_CONTEXT_COASTAL
+  thresholds: {}                   # e.g. OPERATIONAL_CONTEXT_PORT_AREA: {cpa_m: 150, tcpa_s: 240, danger_cpa_m: 80, danger_tcpa_s: 120}
+  clear_margin: 1.2                # a grade is left only beyond 1.2 x its threshold
+  advice_validity_s: 30
+  advice_restate_s: 5
+  restricted_visibility_m: 1852    # below this (visibility_range_m input), Rule 19 applies
+  min_alteration_deg: 30           # Rule 8: readily apparent
+  max_alteration_deg: 90
+  alteration_step_deg: 10
+  speed_factors: [0.5, 0.25]
+  horizon_s: 1800
+  alarms: true

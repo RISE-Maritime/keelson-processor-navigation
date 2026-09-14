@@ -38,6 +38,7 @@ class Inputs:
         *,
         need_routes: bool,
         need_targets: bool = False,
+        need_dispositions: bool = False,
         clock=time.time_ns,
     ):
         self.session = session
@@ -45,6 +46,7 @@ class Inputs:
         self.world = world
         self.need_routes = need_routes
         self.need_targets = need_targets
+        self.need_dispositions = need_dispositions
         self.clock = clock
         self._subscribers = []
         self._warned: set[str] = set()
@@ -64,6 +66,10 @@ class Inputs:
             self._subscribe(route_key, lambda s: self._on_route(s, live=True))
         for subject, source in sorted(self.conf["inputs"].items()):
             self._subscribe(self._key(subject, source), self._input_handler(subject))
+        if self.need_dispositions:
+            wire = "raw_json" if self.conf["codec"] == "rider" else "advice_disposition"
+            key = self._key(wire, "**")
+            self._subscribe(key, self._disposition_handler(wire), label=key)
         if self.need_targets:
             for feed in self.conf["traffic"]["feeds"]:
                 for subject in TARGET_SUBJECTS:
@@ -150,6 +156,24 @@ class Inputs:
             plan = translate.route_plan(self._decode(sample, "route"))
             self.world.put_declared(rest[0], plan, self.clock(), live)
         # route/{id}/latest is deliberately unused: a voyage pins an edition, never latest.
+
+    def _disposition_handler(self, wire: str):
+        from .codec import Codec, CodecError
+
+        codec = Codec(self.conf["codec"])
+
+        def handle(sample):
+            try:
+                decoded = codec.decode(wire, bytes(sample.payload.to_bytes()))
+            except CodecError:
+                return  # some other raw_json record on this vessel: not ours to judge
+            if decoded.subject != "advice_disposition":
+                return
+            if "advice_id" not in decoded.payload:
+                raise translate.TranslateError("advice_disposition without advice_id")
+            self.world.put_disposition(decoded.payload)
+
+        return handle
 
     def _target_handler(self, feed: dict, subject: str):
         source = f"{feed['entity']}/{feed['source']}"

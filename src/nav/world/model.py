@@ -38,6 +38,7 @@ class World:
         self._editions: dict[tuple[str, int], RoutePlan] = {}
         self._declared: dict[str, Declared] = {}
         self._rejected: dict[str, str] = {}
+        self._dispositions: list[dict] = []
         self.inputs = Latch()
         self.targets = TargetTable()
 
@@ -56,6 +57,16 @@ class World:
             if not live and prev is not None and prev.live:
                 return  # a storage reply never overrides a live heartbeat
             self._declared[source_id] = Declared(plan, received_ns, live)
+
+    def put_disposition(self, payload: dict) -> None:
+        """An advice_disposition from outside, as its payload dict. Drained by the tick."""
+        with self._lock:
+            self._dispositions.append(payload)
+
+    def take_dispositions(self) -> list[dict]:
+        with self._lock:
+            out, self._dispositions = self._dispositions, []
+        return out
 
     def reject(self, key: str, reason: str) -> None:
         """Record an input that arrived but could not be used, for navigation_state."""

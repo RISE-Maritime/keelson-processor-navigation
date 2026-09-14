@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 MODULES = ("route_monitor", "traffic", "colreg", "guidance", "conduct", "decision_log")
 
 # Enabling any other module is refused, never ignored.
-IMPLEMENTED_MODULES = frozenset({"conduct", "route_monitor", "traffic"})
+IMPLEMENTED_MODULES = frozenset({"conduct", "route_monitor", "traffic", "colreg"})
 
 CODECS = ("rider", "proto")
 
@@ -27,7 +27,11 @@ OWNSHIP_INPUTS = (
     "course_over_ground_deg",
     "speed_over_ground_knots",
 )
-REQUIRED_INPUTS = {"route_monitor": ("location_fix",), "traffic": ("location_fix",)}
+REQUIRED_INPUTS = {
+    "route_monitor": ("location_fix",),
+    "traffic": ("location_fix",),
+    "colreg": ("location_fix", "course_over_ground_deg", "speed_over_ground_knots"),
+}
 
 ROUTE_MONITOR_DEFAULTS = {
     "execution_hz": 1.0,
@@ -57,6 +61,21 @@ TRAFFIC_DEFAULTS = {
     "exclude_targets": [],
 }
 
+COLREG_DEFAULTS = {
+    "default_context": "OPERATIONAL_CONTEXT_COASTAL",
+    "thresholds": {},  # per OPERATIONAL_CONTEXT_*: {cpa_m, tcpa_s, danger_cpa_m, danger_tcpa_s}
+    "clear_margin": 1.2,
+    "advice_validity_s": 30.0,
+    "advice_restate_s": 5.0,
+    "restricted_visibility_m": 1852.0,
+    "min_alteration_deg": 30.0,
+    "max_alteration_deg": 90.0,
+    "alteration_step_deg": 10.0,
+    "speed_factors": [0.5, 0.25],
+    "horizon_s": 1800.0,
+    "alarms": True,
+}
+
 DEFAULTS: dict = {
     "realm": "rise",
     "entity_id": None,
@@ -68,10 +87,11 @@ DEFAULTS: dict = {
     "inputs": {},
     "route_monitor": dict(ROUTE_MONITOR_DEFAULTS),
     "traffic": copy.deepcopy(TRAFFIC_DEFAULTS),
+    "colreg": copy.deepcopy(COLREG_DEFAULTS),
 }
 
 _CLI_OVERRIDES = ("realm", "entity_id", "source_base", "codec")
-_MERGED_SECTIONS = ("modules", "route_monitor", "traffic")
+_MERGED_SECTIONS = ("modules", "route_monitor", "traffic", "colreg")
 
 
 class ConfigError(ValueError):
@@ -124,6 +144,7 @@ def _validate(conf: dict) -> None:
     _validate_inputs(conf)
     _validate_route_monitor(conf)
     _validate_traffic(conf)
+    _validate_colreg(conf)
 
 
 def _validate_inputs(conf: dict) -> None:
@@ -216,6 +237,64 @@ def _validate_traffic(conf: dict) -> None:
         raise ConfigError("traffic.publish_hz cannot exceed tick_hz")
     if conf["modules"].get("traffic") and not feeds:
         raise ConfigError("module 'traffic' needs at least one traffic.feeds entry")
+
+
+def _validate_colreg(conf: dict) -> None:
+    from .colreg.risk import DEFAULT_THRESHOLDS
+
+    cr = conf.get("colreg")
+    if not isinstance(cr, dict):
+        raise ConfigError("colreg must be a mapping")
+    unknown = set(cr) - set(COLREG_DEFAULTS)
+    if unknown:
+        raise ConfigError(f"unknown colreg setting(s): {sorted(unknown)}")
+    if cr["default_context"] not in DEFAULT_THRESHOLDS:
+        raise ConfigError(f"colreg.default_context must be one of {sorted(DEFAULT_THRESHOLDS)}")
+    if not isinstance(cr["thresholds"], dict):
+        raise ConfigError("colreg.thresholds must be a mapping of context to thresholds")
+    for context, th in cr["thresholds"].items():
+        if context not in DEFAULT_THRESHOLDS:
+            raise ConfigError(f"colreg.thresholds: unknown context {context!r}")
+        if not isinstance(th, dict) or set(th) != {
+            "cpa_m",
+            "tcpa_s",
+            "danger_cpa_m",
+            "danger_tcpa_s",
+        }:
+            raise ConfigError(
+                f"colreg.thresholds.{context} needs cpa_m, tcpa_s, danger_cpa_m, danger_tcpa_s"
+            )
+        if not all(_positive(v) for v in th.values()):
+            raise ConfigError(f"colreg.thresholds.{context} values must be positive")
+        if th["danger_cpa_m"] > th["cpa_m"] or th["danger_tcpa_s"] > th["tcpa_s"]:
+            raise ConfigError(f"colreg.thresholds.{context}: danger must be inside risk")
+    for key in (
+        "advice_validity_s",
+        "advice_restate_s",
+        "restricted_visibility_m",
+        "horizon_s",
+        "min_alteration_deg",
+        "max_alteration_deg",
+        "alteration_step_deg",
+    ):
+        if not _positive(cr[key]):
+            raise ConfigError(f"colreg.{key} must be a positive number")
+    if not isinstance(cr["clear_margin"], (int, float)) or cr["clear_margin"] < 1:
+        raise ConfigError("colreg.clear_margin must be at least 1")
+    if cr["advice_restate_s"] >= cr["advice_validity_s"]:
+        raise ConfigError("colreg.advice_restate_s must be shorter than advice_validity_s")
+    if cr["min_alteration_deg"] > cr["max_alteration_deg"]:
+        raise ConfigError("colreg.min_alteration_deg cannot exceed max_alteration_deg")
+    if not cr["speed_factors"] or not all(
+        isinstance(f, (int, float)) and 0 < f < 1 for f in cr["speed_factors"]
+    ):
+        raise ConfigError("colreg.speed_factors must be fractions between 0 and 1")
+    if not isinstance(cr["alarms"], bool):
+        raise ConfigError("colreg.alarms must be true or false")
+    if conf["modules"].get("colreg") and not conf["modules"].get("traffic"):
+        raise ConfigError(
+            "module 'colreg' needs module 'traffic': encounters are assessed from its targets"
+        )
 
 
 def load(args=None) -> dict:

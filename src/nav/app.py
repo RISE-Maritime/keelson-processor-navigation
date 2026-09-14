@@ -86,7 +86,7 @@ def run(session, conf: dict, stop) -> None:
     import keelson
     from keelson.scaffolding import declare_liveliness, put
 
-    from .bus.codec import Codec
+    from .bus.codec import RAW_JSON, Codec
     from .bus.inputs import Inputs
     from .runtime import Processor
 
@@ -128,6 +128,7 @@ def run(session, conf: dict, stop) -> None:
             processor.world,
             need_routes=processor.needs_routes,
             need_targets=processor.needs_targets,
+            need_dispositions=processor.needs_dispositions,
         )
         stack.callback(inputs.close)
         inputs.start()
@@ -137,7 +138,11 @@ def run(session, conf: dict, stop) -> None:
         while True:
             for out in processor.tick(time.time_ns()):
                 wire = codec.wire_subject(out.subject)
-                source_id = out.source_id or config_mod.module_source_id(conf, out.module)
+                module_source = config_mod.module_source_id(conf, out.module)
+                # A rider stays on its module's own raw_json key and carries its ids in the payload:
+                # putting encounter or advice ids in the source slot of raw_json would spread one
+                # module's records across the vessel's whole raw_json namespace.
+                source_id = module_source if wire == RAW_JSON else (out.source_id or module_source)
                 try:
                     data = codec.encode(out.subject, out.payload)
                     if out.target_id is not None:

@@ -38,6 +38,7 @@ class WaypointPlan:
     planned_sog_knots: float | None = None
     radius_m: float | None = None
     leg: LegLimits | None = None
+    operational_context: str | None = None  # keelson.OperationalContext name; None when unspecified
 
 
 @dataclass(frozen=True)
