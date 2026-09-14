@@ -3,12 +3,12 @@
 Single source of truth for **pending** work, as a checklist. Completed items are pruned; `git log`
 has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is its phase checklist.
 
-**Status:** Phases 0, 1 and 2 are done; Phase 3 is in progress. Route monitoring publishes `route_execution`,
-`envelope_exceedance` and alarms (live against Slipway `slipway-alpha`: 1.00 s interval,
-`MODE_READY`). Traffic publishes per-target CPA under `@target` (live with real AIS from
-`maritimedb`: 110 targets in 12 NM, zero errors; 2,550 of 2,554 published CPAs within the
-dead-reckoning bound of Crowsnest's formula recomputed from the raw inputs, median difference 0 m).
-
+**Status:** Phases 0 to 3 are done. Route monitoring publishes `route_execution`,
+`envelope_exceedance` and alarms (live against Slipway `slipway-alpha`, and *From vessel* in
+Crowsnest). Traffic publishes per-target CPA under `@target` (live with real AIS; matches Crowsnest's
+formula). The COLREG advisor publishes encounters, advice and dispositions and commands nothing
+(accepted against Slipway's `rivo-crossing` replayed in-process). Draft keelson payloads compile on a
+local keelson branch and the processor's payloads parse into them. Phase 4, guidance, is next.
 
 ## Invariants (read before touching anything)
 
@@ -23,37 +23,16 @@ dead-reckoning bound of Crowsnest's formula recomputed from the raw inputs, medi
 - New payloads ride `raw_json` until the keelson PR lands; field sets mirror the proto drafts exactly.
   A rider is published on `raw_json/{source_base}/{module}` and named by its `record` field, as Slipway does.
 - Every new draft subject needs a proto in `docs/upstream/` and an entry in `src/nav/contracts/raw_json_riders.yaml`.
+- COLREG advice is a record. The colreg module emits only encounter, navigation_advice, advice_disposition and alarm; a test holds it to that.
+- Encounter situation and own role are latched when an encounter opens.
+- Safe passing: encounter vessels to the RISK distance, every other target outside DANGER.
+- A rider is published on its module's own `raw_json` key; ids travel in the payload.
 - `entity_id` has no default, and enabling an unimplemented module is a config error.
 - Inputs name their `source_id` explicitly; `truth` sources are refused. Freshness is judged on local receipt time.
 - Alarm descriptions must be stable while the condition holds: a changed description republishes immediately.
 - `envelope_exceedance` is published only with a voyage; a declared route has none.
 - `maritimedb` AIS stamps each report at publish time, not transmission time: the timestamp carries no report age. Dead-reckon targets from local receipt.
 - Traffic publishes only defined values: no CPA from an unreported course or speed, no bow crossing astern.
-
-## Phase 3 — COLREG advisor (advisory only)
-
-In progress. Design decisions:
-- Classification uses heading where known, course otherwise (Rules 13-15 turn on aspect; Slipway ADR-0063). Sectors: ±6° head-on, 112.5° abaft beam. Rule 18 from AIS `nav_status` only; stopped or anchored targets are obstructions (Rule 8); Rule 19 in restricted visibility gives no stand-on vessel.
-- Not modelled, and said so in every advice rationale: narrow channels (9), traffic separation schemes (10), chart and depth. Advice is never checked against the chart in this phase.
-- An encounter opens at RISK, latches its situation and role for its life (roles do not flip as geometry changes), and closes past the clear margin (1.2×) or when range is opening beyond it.
-- Thresholds per `OperationalContext` of the current leg (open sea 1 NM / 12 min, down to port area); unspecified uses coastal.
-- Safe passing: the vessels an advice answers must be cleared to the RISK distance; every other target must stay outside DANGER. Holding bystanders to the RISK distance let one ship passing at its edge veto every sound manoeuvre (found on `rivo-crossing`: TARGET 1 on Alpha's starboard quarter).
-- One active advice for the vessel, covering every open encounter, restated with the same id while it holds and superseded when the manoeuvre changes. Give-way: smallest starboard alteration ≥ 30° (Rule 8 "readily apparent") clearing every in-range target, then speed reduction, then stop. Stand-on: maintain; act under 17(a)(ii) only when the give-way vessel is not acting and TCPA is short, never to port for a target on the port side (17(c)).
-- `advice_disposition` from outside (Crowsnest, later `conduct`) is recorded, never acted on in this phase.
-- Acceptance runs Slipway's kernel in-process on `rivo-crossing` to a recorded fixture, not on the shared bus, so the running `slipway-alpha` exercise is not disturbed.
-
-- [x] `colreg/classify.py`: sectors, Rules 13/14/15/17/18/19, stopped targets, unknown directions; truth-table tests
-- [x] `colreg/risk.py`: NONE/WATCH/RISK/DANGER per operational context, hysteresis clear margin 1.2
-- [x] `colreg/synthesize.py`: candidate manoeuvres evaluated against every in-range target; expected CPA and minimum range
-- [x] `colreg/advisor.py`: encounter lifecycle with latched roles, advice restatement/supersession/expiry, 17(a)(ii) trigger, RESUME_TRACK when avoiding encounters close
-- [x] Draft protos `Encounter`, `NavigationAdvice`, `AdviceDisposition` in `docs/upstream/`, rider register entries, payload classes checked against the drafts
-- [x] Wiring: `WaypointPlan.operational_context`, visibility input for Rule 19, `advice_disposition` rider subscription, publish `encounter/{voyage|novoyage}/{id}`, `navigation_advice/...`, collision alarms
-- [x] Advisory-by-construction test: the colreg module can publish only encounter, advice, disposition and alarm subjects
-- [ ] e2e on an isolated session: encounter rider on the module's own `raw_json` key, inbound `advice_disposition` rider reaches the advisor
-- [ ] keelson worktree `feature/navigation-decision-payloads`: drafts + `subjects.yaml` / `qos.yaml` rows, compiled by `generate_python.sh`, committed locally (not pushed)
-- [x] `docs/UPSTREAM-ASKS.md`: paste-ready protos + `subjects.yaml` / `qos.yaml` rows
-- [x] Fixture from Slipway `rivo-crossing`, kernel run in-process for 900 s (`tests/fixtures/rivo_crossing.jsonl`)
-- [x] **Acceptance** (`tests/test_acceptance_rivo.py`, green): one CROSSING_STBD / GIVE_WAY encounter for Alpha against Bravo, DANGER at peak, closed at the pass (~420 s); first advice a 30-90° starboard alteration that clears Bravo to the RISK distance and keeps TARGET 1 outside DANGER (recomputed from the fixture); RESUME_TRACK supersedes it; collision alarm raised and cleared; only advisory subjects published
 
 ## Phase 4 — guidance backend A + conduct FSM
 
@@ -95,6 +74,8 @@ In progress. Design decisions:
 - [ ] Decide whether `route_execution` for a declared route should be keyed `declared-{source}` or wait for a voyage (see Open questions)
 - [x] Route chip provenance in the browser: *From vessel* with the processor running, *Computed here* after it stopped and the page reloaded. *Vessel quiet* (stop without reload) not captured: the Crowsnest tab froze
 - [ ] CPA/TCPA side by side with Crowsnest's Bearing app target list, time-aligned. Partial on 2026-09-14: one sample 8 s apart agreed (ANCHORED BULKER CPA 0.48/0.48 NM, rel. bearing 54°/50°, TCPA 1.0/1.2 min; NORDIC TRADER CPA 0.31/0.30 NM). A clean aligned run is still to do; the tab froze before it
+- [ ] Push keelson branch `feature/navigation-decision-payloads` (local worktree `../keelson-navigation-payloads`, commit `bebc8e6`) and open the PR against `dev`. It adds the four draft payloads, `subjects.yaml` and `qos.yaml` rows; `generate_python.sh` compiles them without warnings and the processor's payloads parse into the generated classes. Text for the PR body is in `docs/UPSTREAM-ASKS.md`
+- [ ] Decide whether Phase 4 replaces or feeds `keelson-processor-autopilot` v0.2.0, which already steers `slipway-alpha`
 - [ ] Crowsnest state changed by the agent on 2026-09-14 with permission: own ship set to *Slipway Alpha (SIM)* and `remote_control_target_override_v1` set to `slipway-alpha` (it was `drone-sim-01`). Previous values are in localStorage key `claude_backup_before_slipway_alpha_20260914`; restore or delete it
 
 ## Open questions

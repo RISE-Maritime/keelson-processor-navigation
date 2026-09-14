@@ -11,7 +11,6 @@
 syntax = "proto3";
 
 import "google/protobuf/timestamp.proto";
-import "Route.proto";  // ColregSituation (the plan-side enum; extended below for a live encounter)
 
 package keelson;
 
@@ -40,8 +39,8 @@ message Encounter {
     RISK_DANGER = 3;
   }
 
-  // The live situation. ColregSituation's values, plus two the plan-side enum has no use for.
-  // Carried as its own enum so the plan enum does not grow values a route cannot mean.
+  // The live situation: keelson.ColregSituation's values (Route.proto), plus two the plan-side
+  // enum has no use for. Its own enum so the plan enum does not grow values a route cannot mean.
   enum Situation {
     COLREG_SITUATION_UNSPECIFIED = 0;
     COLREG_SITUATION_OVERTAKING = 1;     // own ship is overtaking
