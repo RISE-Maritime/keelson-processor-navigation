@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keelson-processor-navigation"
+version = "0.1.0"
+description = "Keelson processor that owns navigation of an autonomous vessel under automation: route monitoring, traffic and COLREG advice, guidance, and the navigation state machine"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "RISE Maritime" }]
+dependencies = [
+    # keelson comes from the monorepo SDK (../keelson/sdks/python), not PyPI: later phases need
+    # payloads.Route_pb2, which the PyPI wheel does not ship. See CONTRIBUTING.md.
+    "keelson",
+    "eclipse-zenoh>=1.2.1",
+    "protobuf>=5.29.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6", "pytest>=8"]
+
+[project.scripts]
+navigation = "nav.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nav = ["contracts/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: pure tests, no zenoh session",
+    "e2e: opens an isolated local zenoh peer session (no router, no multicast)",
+]

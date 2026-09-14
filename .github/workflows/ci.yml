@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The PyPI keelson wheel lags the monorepo, so build the SDK from source.
+      - uses: actions/checkout@v4
+        with:
+          repository: RISE-Maritime/keelson
+          ref: dev
+          path: keelson
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Generate keelson Python SDK
+        working-directory: keelson
+        run: |
+          uv sync --group dev
+          cd sdks/python && ./generate_python.sh
+
+      - name: Install
+        run: |
+          uv venv --python 3.13
+          uv pip install ./keelson/sdks/python -e ".[dev]"
+
+      - name: Lint
+        run: |
+          .venv/bin/ruff check bin/ src/ tests/
+          .venv/bin/ruff format --check bin/ src/ tests/
+
+      - name: Test
+        run: .venv/bin/pytest -v

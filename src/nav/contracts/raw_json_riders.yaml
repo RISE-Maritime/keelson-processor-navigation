@@ -1,0 +1,32 @@
+# Everything keelson-processor-navigation publishes as JSON on keelson's `raw_json` subject.
+#
+# Same discipline as SLIPWAY/contracts/raw-json-riders.yaml: this is a debt list and it shrinks.
+# A rider is added only with the upstream check recorded (which keelson was searched, when, what
+# was found), because the failure it prevents is inventing JSON for something keelson types.
+#
+# Wire format on raw_json (keelson.TimestampedString.value):
+#   {"record": "<record>", "rider_version": 1, "payload": {<protobuf JSON of `message`>}}
+# published under the owning module's source id, "{source_base}/{module}".
+#
+# retire_when.status:
+#   awaiting_upstream  keelson has no subject for it. tests/test_riders.py fails the moment the
+#                      installed keelson registers it, so an SDK bump cannot leave JSON in place.
+#   available          keelson has it; switch the codec to proto and delete this entry.
+
+version: 1
+
+riders:
+  - record: navigation_state
+    module: conduct
+    message: keelson.NavigationState
+    draft_proto: docs/upstream/NavigationState.proto
+    upstream:
+      checked_version: "keelson dev @ 3ecc656"
+      checked_date: "2026-09-14"
+      citation: >-
+        subjects.yaml has vehicle_mode (ArduPilot mode string), vehicle_state (MAV_STATE),
+        operational_authority (ceiling) and command_authority (lease). None states what the
+        navigation function is doing; crowsnest-dev docs/NAVIGATION-DECISION-SERVICES.md §6.2.
+    retire_when:
+      subject: navigation_state
+      status: awaiting_upstream

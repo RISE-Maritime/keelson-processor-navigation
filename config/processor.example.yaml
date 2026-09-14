@@ -1,0 +1,29 @@
+# keelson-processor-navigation configuration.
+# Precedence, lowest first: built-in defaults < this file < CLI flags.
+
+realm: rise
+
+# REQUIRED. The vessel this processor navigates. Every subject is published under this entity.
+# No default on purpose: a wrong entity id navigates the wrong ship.
+entity_id: slipway-alpha
+
+# Each module publishes under "{source_base}/{module}", so each decision has its own source.
+source_base: navigation/0
+
+# rider: draft subjects (navigation_state, encounter, ...) ride raw_json until keelson types them.
+# proto: every subject is published as its keelson protobuf type. Only valid once the installed
+#        keelson SDK registers all draft subjects.
+codec: rider
+
+tick_hz: 10         # deterministic processing loop
+state_hz: 1         # navigation_state publication rate
+
+# Enabling a module that is not implemented in this version is a configuration error, never a
+# silent no-op.
+modules:
+  route_monitor: false
+  traffic: false
+  colreg: false
+  guidance: false
+  conduct: true
+  decision_log: false
