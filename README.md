@@ -96,6 +96,14 @@ protobuf JSON form of a draft proto in [docs/upstream/](docs/upstream/). The reg
 [src/nav/contracts/raw_json_riders.yaml](src/nav/contracts/raw_json_riders.yaml). Once keelson
 registers a subject, `codec: proto` publishes it typed with no other change.
 
+## Deployment
+
+Guidance (Phase 4, not yet built) will drive a vessel through `vehicle_control/v1`. A vessel has one
+control mapping and the last writer wins, so this processor must not share a vessel with
+`keelson-processor-autopilot`, which re-installs its mapping whenever the helm is free. Stop the
+autopilot container on any vessel this processor steers. Monitoring, traffic and advice alone are
+safe beside it: they command nothing.
+
 ## Container
 
 ```bash

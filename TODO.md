@@ -36,6 +36,14 @@ local keelson branch and the processor's payloads parse into them. Phase 4, guid
 
 ## Phase 4 — guidance backend A + conduct FSM
 
+Guidance replaces `keelson-processor-autopilot` on any vessel it drives (decision 2026-09-14, see Needs a person). Consequences for this phase:
+
+- [ ] Never share a vessel with a running `keelson-processor-autopilot`: Slipway keeps one control mapping per vessel, last writer wins, and the autopilot re-installs itself whenever the mapping is empty. Documented under README Deployment
+- [ ] On start, `get_control_mapping`: if axes are mapped to another source, do not take the helm; publish `navigation_state` with the reason and raise an alarm. Never overwrite another controller's mapping silently
+- [ ] Publish axes at 10–20 Hz on a dedicated timer (the contract's rate; the autopilot's 5 Hz is below it)
+- [ ] Slipway scenario `alpha-navigation`, modelled on `alpha-autopilot.yaml`, requiring `slipway-alpha` / `navigation/0/guidance` / `joystick_x_pct` instead of `autopilot` / `wheel_position_pct`. Run in-process first; on the bus only with the autopilot container stopped
+- [ ] Open: backend B (`vehicle_navigation/v1`) for real ArduPilot hulls has no Slipway counterpart to test against
+
 - [ ] `bus/lease.py`: `CommandAuthority` client — request, take (token), heartbeat, release with same token; receiver-clock lapse; `command_request` publishing
 - [ ] `guidance/backends/axes.py`: `vehicle_control/v1 set_control_mapping` (`steering`/`throttle`), publish `joystick_x_pct`/`joystick_y_pct` at 10–20 Hz on a dedicated timer repeating last setpoint
 - [ ] `guidance/track.py`: XTE + heading controller (start from `keelson-processor-autopilot` dead-reckoned PID), wheel-over from `Waypoint.wheel_over_distance_m`, fly-by turn per `Waypoint.radius_m`, return-to-track
@@ -75,7 +83,7 @@ local keelson branch and the processor's payloads parse into them. Phase 4, guid
 - [x] Route chip provenance in the browser: *From vessel* with the processor running, *Computed here* after it stopped and the page reloaded. *Vessel quiet* (stop without reload) not captured: the Crowsnest tab froze
 - [ ] CPA/TCPA side by side with Crowsnest's Bearing app target list, time-aligned. Partial on 2026-09-14: one sample 8 s apart agreed (ANCHORED BULKER CPA 0.48/0.48 NM, rel. bearing 54°/50°, TCPA 1.0/1.2 min; NORDIC TRADER CPA 0.31/0.30 NM). A clean aligned run is still to do; the tab froze before it
 - [ ] Push keelson branch `feature/navigation-decision-payloads` (local worktree `../keelson-navigation-payloads`, commit `bebc8e6`) and open the PR against `dev`. It adds the four draft payloads, `subjects.yaml` and `qos.yaml` rows; `generate_python.sh` compiles them without warnings and the processor's payloads parse into the generated classes. Text for the PR body is in `docs/UPSTREAM-ASKS.md`
-- [ ] Decide whether Phase 4 replaces or feeds `keelson-processor-autopilot` v0.2.0, which already steers `slipway-alpha`
+- [x] Phase 4 replaces `keelson-processor-autopilot` on vessels guidance drives (decided 2026-09-14). Feeding it is not possible: v0.2.0 reads a GeoJSON LineString once at startup, has no Route, setpoint, speed or `command_authority` input, publishes at 5 Hz, and re-takes the helm within ~5 s of the control mapping going empty. The autopilot stays as-is for simple track demos; its v0.2.0 image is a local build of its open PR #5
 - [ ] Crowsnest state changed by the agent on 2026-09-14 with permission: own ship set to *Slipway Alpha (SIM)* and `remote_control_target_override_v1` set to `slipway-alpha` (it was `drone-sim-01`). Previous values are in localStorage key `claude_backup_before_slipway_alpha_20260914`; restore or delete it
 
 ## Open questions
