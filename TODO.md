@@ -3,8 +3,9 @@
 Single source of truth for **pending** work, as a checklist. Completed items are pruned; `git log`
 has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is its phase checklist.
 
-**Status:** Phase 0 is done. The processor connects, declares liveliness and publishes
-`navigation_state{MODE_IDLE}` as a raw_json rider at 1 Hz. Phase 1 is next.
+**Status:** Phases 0 and 1 are done. Route monitoring publishes `route_execution`,
+`envelope_exceedance` and alarms, verified live against Slipway's `slipway-alpha` on 2026-09-14
+(1.00 s interval, `route_execution/declared-sim`, `MODE_READY`). Phase 2 is next.
 
 ## Invariants (read before touching anything)
 
@@ -20,17 +21,9 @@ has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is it
   A rider is published on `raw_json/{source_base}/{module}` and named by its `record` field, as Slipway does.
 - Every new draft subject needs a proto in `docs/upstream/` and an entry in `src/nav/contracts/raw_json_riders.yaml`.
 - `entity_id` has no default, and enabling an unimplemented module is a config error.
-
-## Phase 1 — route monitor (`route_execution` producer)
-
-- [ ] `world/route_model.py`: subscribe `voyage/*` and `route/**`; parse both key shapes (port `crowsnest-dev/src/services/declaredRoute.js`); resolve `Voyage.route_ref` via `route/{id}/edition/{N}`
-- [ ] `world/ownship.py`: latched newest-wins state from `location_fix`, `heading_true_north_deg`, `course_over_ground_deg`, `speed_over_ground_knots`, `yaw_rate_degps`; freshness per subject
-- [ ] `route_monitor/progress.py`: port `computeRouteExecution` (`crowsnest-dev/src/services/routeSync.js:1723`): active leg by along-track projection, signed XTD (+stbd), distance/bearing to next, ETA next + arrival, `deviation_active` against `Leg.xtd_*`
-- [ ] `route_monitor/envelope.py`: `EnvelopeLimitState` per `RouteInfo` limit vs measured subject; `EnvelopeExceedance` open → restate → close with `responses[]`, three timestamps, key `envelope_exceedance/{voyage_id}/{exceedance_id}`
-- [ ] Publish `route_execution/{voyage_id}` at 1 Hz (`declare_publisher_for_subject`, QoS `elevated`)
-- [ ] Deviation → `alarm` (CATEGORY_NAVIGATION)
-- [ ] Unit tests: XTD sign, leg selection at waypoint boundaries, ETA, envelope lifecycle restatement
-- [ ] **Acceptance**: against Slipway `slipway-alpha`, Crowsnest Route tab chip flips *Computed here → From vessel* with no Crowsnest change
+- Inputs name their `source_id` explicitly; `truth` sources are refused. Freshness is judged on local receipt time.
+- Alarm descriptions must be stable while the condition holds: a changed description republishes immediately.
+- `envelope_exceedance` is published only with a voyage; a declared route has none.
 
 ## Phase 2 — traffic + CPA
 
@@ -86,7 +79,16 @@ has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is it
 - [ ] Crowsnest Conduct panel reads it (crowsnest-dev change, own PR)
 - [ ] Flip codec riders → protos once keelson release carries them; retire riders
 
+## Needs a person
+
+- [ ] With the processor running against `slipway-alpha`, confirm Crowsnest's Route tab chip reads *From vessel* (it reads `route_execution/*`, keyed by vessel, stale after 5 s, and rejects a different route id). Checked on the wire, not in a browser
+- [ ] Decide whether `route_execution` for a declared route should be keyed `declared-{source}` or wait for a voyage (see Open questions)
+
 ## Open questions
+
+- [ ] A declared route has no voyage, so its execution is keyed `route_execution/declared-{source}` with an empty `voyage_id`. Raise upstream alongside the two-key-shapes ask (crowsnest-dev NAVIGATION-DECISION-SERVICES §6.2)
+- [ ] `RouteExecution.speed_over_ground_knots` and `course_over_ground_deg` are not `optional`, so an unknown SOG reads as 0 kn. Ask keelson for presence
+- [ ] `keelson-processor-autopilot` v0.2.0 already steers `slipway-alpha` via `wheel_position_pct` + `--install-control-mapping` (keelson-platforms). Phase 4 must decide: replace it, or feed it
 
 - [ ] CPA/TCPA thresholds and safe-passing distance per `OperationalContext`
 - [ ] Auto-accept advice at `ASSISTED_AUTONOMOUS` (below DANGER) or only at `FULL_AUTONOMOUS`?

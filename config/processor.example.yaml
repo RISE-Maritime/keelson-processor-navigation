@@ -3,27 +3,57 @@
 
 realm: rise
 
-# REQUIRED. The vessel this processor navigates. Every subject is published under this entity.
+# REQUIRED. The vessel this processor navigates. Every subject is read and published under it.
 # No default on purpose: a wrong entity id navigates the wrong ship.
 entity_id: slipway-alpha
 
 # Each module publishes under "{source_base}/{module}", so each decision has its own source.
 source_base: navigation/0
 
-# rider: draft subjects (navigation_state, encounter, ...) ride raw_json until keelson types them.
+# rider: draft subjects (navigation_state, ...) ride raw_json until keelson types them.
 # proto: every subject is published as its keelson protobuf type. Only valid once the installed
 #        keelson SDK registers all draft subjects.
 codec: rider
 
-tick_hz: 10         # deterministic processing loop
-state_hz: 1         # navigation_state publication rate
+tick_hz: 10
+state_hz: 1
 
-# Enabling a module that is not implemented in this version is a configuration error, never a
-# silent no-op.
+# Enabling a module that is not implemented in this version is a configuration error.
 modules:
-  route_monitor: false
+  route_monitor: true
   traffic: false
   colreg: false
   guidance: false
   conduct: true
   decision_log: false
+
+# The source_id each input is read from, under entity_id. No wildcard default: a vessel can publish
+# one subject from several sources. Simulator ground truth ("truth") is refused.
+# Unlisted envelope subjects are reported as unmeasured.
+# These values match Slipway's slipway-alpha: position from slipway-gnss, the rest from the kernel.
+inputs:
+  location_fix: gnss
+  heading_true_north_deg: sim
+  course_over_ground_deg: sim
+  speed_over_ground_knots: sim
+  # roll_deg:
+  # true_wind_speed_mps:
+  # true_wind_speed_max_mps:
+  # wave_height_significant_m:
+  # visibility_range_m:
+
+route_monitor:
+  execution_hz: 1                  # route_execution rate
+  max_state_age_s: 3               # own-ship inputs older than this are not used
+  measurement_max_age_s: 30        # envelope inputs older than this are unmeasured
+  declared_stale_s: 35             # a declared route unheard this long is not monitored
+  monitor_declared_route: true     # with no voyage, monitor route/{source} declarations
+  arrival_radius_m: 50             # capture radius when a waypoint has no radius_m
+  reacquire_margin_m: 100          # a later leg must be this much closer to jump to it
+  min_sog_for_eta_knots: 0.5
+  xtd_limit_fallback_m: 50         # when a leg authors no XTD limit
+  deviation_clear_fraction: 0.8    # deviation alarm clears below this fraction of the limit
+  envelope_clear_margin: 0.02      # exceedance closes this fraction inside the limit
+  alarms: true
+  alarm_republish_s: 5
+  alarm_ttl_s: 15

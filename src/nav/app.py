@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from collections import OrderedDict
 from contextlib import ExitStack
 
 from . import config as config_mod
 
 logger = logging.getLogger(__name__)
+
+_MAX_CACHED_PUBLISHERS = 8
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,47 +34,105 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+class _Publishers:
+    """Declared publishers by key, with QoS from the subject. Keys with an id in the source slot
+    change over a run, so the cache is bounded."""
+
+    def __init__(self, session):
+        self.session = session
+        self._pubs: OrderedDict[str, object] = OrderedDict()
+
+    def put(self, key: str, subject: str, data: bytes) -> None:
+        from keelson.scaffolding import declare_publisher_for_subject
+
+        pub = self._pubs.get(key)
+        if pub is None:
+            pub = self._pubs[key] = declare_publisher_for_subject(self.session, key, subject)
+            logger.info("Publishing %s", key)
+            while len(self._pubs) > _MAX_CACHED_PUBLISHERS:
+                self._pubs.popitem(last=False)[1].undeclare()
+        self._pubs.move_to_end(key)
+        pub.put(data)
+
+    def close(self) -> None:
+        for pub in self._pubs.values():
+            pub.undeclare()
+        self._pubs.clear()
+
+
+class _DynamicTokens:
+    """Subject liveliness tokens for keys that come and go (route_execution/{voyage})."""
+
+    def __init__(self, session):
+        self.session = session
+        self._tokens: dict[str, object] = {}
+
+    def set(self, keys: set[str]) -> None:
+        for key in sorted(set(self._tokens) - keys):
+            self._tokens.pop(key).undeclare()
+        for key in sorted(keys - set(self._tokens)):
+            self._tokens[key] = self.session.liveliness().declare_token(key)
+
+    def close(self) -> None:
+        self.set(set())
+
+
 def run(session, conf: dict, stop) -> None:
-    """Declare liveliness and publishers, then tick until ``stop.wait()`` returns True.
+    """Declare liveliness, subscribe, then tick until ``stop.wait()`` returns True.
 
     ``stop`` is anything with ``wait(timeout) -> bool``: GracefulShutdown in production, a
     threading.Event in tests (signal handlers can only be installed on the main thread).
     """
     import keelson
-    from keelson.scaffolding import declare_liveliness, declare_publisher_for_subject
+    from keelson.scaffolding import declare_liveliness
 
     from .bus.codec import Codec
+    from .bus.inputs import Inputs
     from .runtime import Processor
 
     realm, entity_id = conf["realm"], conf["entity_id"]
     codec = Codec(conf["codec"])
     processor = Processor(conf)
 
+    def key(subject: str, source_id: str) -> str:
+        return keelson.construct_pubsub_key(realm, entity_id, subject, source_id)
+
     with ExitStack() as stack:
-        publishers = {}
         for module, subjects in processor.publications().items():
             source_id = config_mod.module_source_id(conf, module)
             wire = sorted({codec.wire_subject(s) for s in subjects})
             stack.enter_context(
                 declare_liveliness(session, realm, entity_id, source_id, pubsub_subjects=wire)
             )
-            for subject in wire:
-                key = keelson.construct_pubsub_key(realm, entity_id, subject, source_id)
-                pub = declare_publisher_for_subject(session, key, subject)
-                stack.callback(pub.undeclare)
-                publishers[(module, subject)] = pub
-                logger.info("Publishing %s", key)
+
+        publishers = _Publishers(session)
+        stack.callback(publishers.close)
+        tokens = _DynamicTokens(session)
+        stack.callback(tokens.close)
+
+        inputs = Inputs(session, conf, processor.world, need_routes=processor.needs_routes)
+        stack.callback(inputs.close)
+        inputs.start()
 
         period = 1.0 / conf["tick_hz"]
         deadline = time.monotonic()
         while True:
             for out in processor.tick(time.time_ns()):
                 wire = codec.wire_subject(out.subject)
-                publishers[(out.module, wire)].put(codec.encode(out.subject, out.payload))
+                source_id = out.source_id or config_mod.module_source_id(conf, out.module)
+                try:
+                    publishers.put(
+                        key(wire, source_id), wire, codec.encode(out.subject, out.payload)
+                    )
+                except Exception:
+                    logger.exception("Failed to publish %s from %s", out.subject, out.module)
+            tokens.set({key(s, src) for s, src in processor.dynamic_keys()})
+
             deadline += period
             delay = deadline - time.monotonic()
             if delay < 0:
-                logger.warning("Tick overran by %.3f s", -delay)
+                if -delay > period:
+                    logger.warning("Tick overran by %.3f s", -delay)
                 deadline = time.monotonic()
                 delay = 0.0
             if stop.wait(delay):

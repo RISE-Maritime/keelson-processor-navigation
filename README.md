@@ -3,9 +3,10 @@
 A [keelson](https://github.com/RISE-Maritime/keelson) processor that owns navigation of an
 autonomous vessel (MASS, USV) while it is under automation.
 
-> **Status: Phase 0 skeleton.** It connects, declares liveliness and publishes
-> `navigation_state` as `MODE_IDLE` at 1 Hz. It subscribes to nothing and commands nothing. See
-> [TODO.md](TODO.md) for what comes next and [docs/PLAN.md](docs/PLAN.md) for the design.
+> **Status: Phase 1, route monitoring.** It follows the vessel's active voyage, or its declared
+> route when there is no voyage, and publishes `route_execution` at 1 Hz, `envelope_exceedance`
+> records and navigation alarms. `navigation_state` reads `MODE_READY` while monitoring. It
+> commands nothing. See [TODO.md](TODO.md) and [docs/PLAN.md](docs/PLAN.md).
 
 ## What it will do
 
@@ -33,7 +34,20 @@ cp config/processor.example.yaml config/processor.yaml   # set entity_id to your
 navigation --config config/processor.yaml --connect tcp/localhost:7447
 ```
 
-There is no default `entity_id`. The processor refuses to start without one.
+There is no default `entity_id`, and each input names its `source_id` explicitly. The
+processor refuses to start without them, and refuses simulator `truth` sources.
+
+## What route monitoring reads and writes
+
+| Direction | Key under `{realm}/@v0/{entity_id}/pubsub/` | Notes |
+|---|---|---|
+| in | `voyage/*` | Bootstrapped from router storage at start |
+| in | `route/{id}/edition/{N}` | The edition an ACTIVE voyage pins. `latest` is never used |
+| in | `route/{source_id}` | A vessel's declared route. Monitored only with no voyage in play, and only while its heartbeat is live |
+| in | `location_fix/{source}`, `speed_over_ground_knots/{source}`, … | Sources from `inputs` |
+| out | `route_execution/{voyage_id}` | 1 Hz. For a declared route the token is `declared-{source}` and `voyage_id` is empty |
+| out | `envelope_exceedance/{voyage_id}/{exceedance_id}` | Voyages only. Opened on breach, restated in full on close |
+| out | `alarm/navigation/0/route_monitor` | Deviation, envelope, no position, dangling route. Cleared by publishing an expired alarm |
 
 Watch it:
 

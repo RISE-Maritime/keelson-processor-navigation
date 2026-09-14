@@ -75,7 +75,7 @@ def test_unknown_module_is_refused(tmp_path):
 @pytest.mark.parametrize(
     "yaml_text, match",
     [
-        ("entity_id: a/b\n", "single key chunk"),
+        ("entity_id: a/b\n", "single literal key chunk"),
         ("entity_id: v\ncodec: json\n", "codec"),
         ("entity_id: v\ntick_hz: 0\n", "positive"),
         ("entity_id: v\nstate_hz: 20\ntick_hz: 10\n", "cannot exceed"),
@@ -90,3 +90,51 @@ def test_invalid_values_are_refused(tmp_path, yaml_text, match):
 
 def test_module_source_id(conf):
     assert config_mod.module_source_id(conf, "conduct") == "navigation/0/conduct"
+
+
+def _write(tmp_path, text):
+    f = tmp_path / "c.yaml"
+    f.write_text(text)
+    return str(f)
+
+
+def test_example_file_reads_slipway_operational_sources():
+    conf = config_mod.load(ns(config=str(ROOT / "config" / "processor.example.yaml")))
+    assert conf["modules"]["route_monitor"] is True
+    assert conf["inputs"]["location_fix"] == "gnss"
+    assert conf["route_monitor"]["execution_hz"] == 1
+
+
+@pytest.mark.parametrize("source", ["truth", "kernel/truth"])
+def test_truth_sources_are_refused(tmp_path, source):
+    path = _write(tmp_path, f"entity_id: v\ninputs:\n  location_fix: {source}\n")
+    with pytest.raises(config_mod.ConfigError, match="ground truth"):
+        config_mod.load(ns(config=path))
+
+
+def test_route_monitor_needs_a_position_source(tmp_path):
+    path = _write(tmp_path, "entity_id: v\nmodules:\n  route_monitor: true\n")
+    with pytest.raises(config_mod.ConfigError, match="inputs.location_fix"):
+        config_mod.load(ns(config=path))
+
+
+@pytest.mark.parametrize(
+    "text, match",
+    [
+        ("inputs:\n  rudder_angle_deg: n2k\n", "not an input"),
+        ("inputs:\n  location_fix: '**'\n", "not a key pattern"),
+        ("route_monitor:\n  bogus: 1\n", "unknown route_monitor"),
+        ("route_monitor:\n  alarm_ttl_s: 2\n", "alarm_ttl_s"),
+        ("route_monitor:\n  deviation_clear_fraction: 1.2\n", "below 1"),
+    ],
+)
+def test_input_and_monitor_settings_are_validated(tmp_path, text, match):
+    with pytest.raises(config_mod.ConfigError, match=match):
+        config_mod.load(ns(config=_write(tmp_path, "entity_id: v\n" + text)))
+
+
+def test_route_monitor_section_merges_over_defaults(tmp_path):
+    path = _write(tmp_path, "entity_id: v\nroute_monitor:\n  execution_hz: 2\n")
+    conf = config_mod.load(ns(config=path))
+    assert conf["route_monitor"]["execution_hz"] == 2
+    assert conf["route_monitor"]["alarms"] is True

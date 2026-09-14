@@ -6,8 +6,9 @@ A keelson processor that owns navigation of an autonomous vessel under automatio
 monitoring, traffic and CPA, COLREG advice, guidance, the navigation state machine and the
 decision log. One repo and image, one `source_id` per module (`{source_base}/{module}`).
 
-**Status:** Phase 0 done. Publishes `navigation_state{MODE_IDLE}` as a raw_json rider, subscribes
-to nothing, commands nothing. Next is Phase 1, the `route_execution` producer.
+**Status:** Phase 1 done, verified live against Slipway `slipway-alpha`. Route monitoring
+publishes `route_execution`, `envelope_exceedance` and alarms; `navigation_state` is READY while
+monitoring. Commands nothing. Next is Phase 2, traffic and CPA.
 
 ## Where to look
 
@@ -27,6 +28,10 @@ src/nav/
   runtime.py        Processor.tick(now_ns) -> [Output]; pure and deterministic
   bus/codec.py      payload dict (protobuf JSON form) -> proto or raw_json rider
   bus/riders.py     reads contracts/raw_json_riders.yaml
+  bus/inputs.py     subscriptions + storage bootstrap -> World
+  bus/translate.py  keelson protobuf -> plan and sample types (proto3 presence kept)
+  world/            RoutePlan/VoyagePlan, newest-wins Latch (local receipt time), World snapshot
+  route_monitor/    geodesy, select (which route), progress, envelope, alarms, monitor (per tick)
   conduct/state.py  NavigationState, mirrors docs/upstream/NavigationState.proto
 ```
 
