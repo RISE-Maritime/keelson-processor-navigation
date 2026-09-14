@@ -107,3 +107,21 @@ def test_garbage_payload_is_rejected_not_raised(inputs):
     handler = inputs._guard(inputs._input_handler("location_fix"))
     handler(FakeSample(f"{BASE}/location_fix/gnss", _Payload(b"\xff\x00garbage")))
     assert inputs.world.snapshot().rejected
+
+
+def test_target_samples_are_keyed_by_target_id(traffic_conf):
+    inp = Inputs(None, traffic_conf, World(), need_routes=False, need_targets=True, clock=lambda: 7)
+    feed = traffic_conf["traffic"]["feeds"][0]
+    handler = inp._guard(inp._target_handler(feed, "location_fix"), label="feed")
+    fix = enclosed("foxglove.LocationFix", latitude=57.7, longitude=11.9)
+    handler(sample("rise/@v0/nav-test-ais/pubsub/location_fix/ais/@target/mmsi_265", fix))
+    view = inp.world.targets.snapshot(7, 60, 600)["mmsi_265"]
+    assert view.position.value == (57.7, 11.9) and view.position.source_id == "nav-test-ais/ais"
+
+    for i in range(5):  # garbage from many targets: one rejection, named by the subscription
+        handler(
+            FakeSample(
+                f"rise/@v0/nav-test-ais/pubsub/location_fix/ais/@target/mmsi_{i}", _Payload(b"\xff")
+            )
+        )
+    assert len(inp.world.snapshot().rejected) == 1

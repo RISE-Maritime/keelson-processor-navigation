@@ -3,10 +3,11 @@
 A [keelson](https://github.com/RISE-Maritime/keelson) processor that owns navigation of an
 autonomous vessel (MASS, USV) while it is under automation.
 
-> **Status: Phase 1, route monitoring.** It follows the vessel's active voyage, or its declared
+> **Status: Phase 2, traffic and CPA.** It follows the vessel's active voyage, or its declared
 > route when there is no voyage, and publishes `route_execution` at 1 Hz, `envelope_exceedance`
-> records and navigation alarms. `navigation_state` reads `MODE_READY` while monitoring. It
-> commands nothing. See [TODO.md](TODO.md) and [docs/PLAN.md](docs/PLAN.md).
+> records and navigation alarms. It tracks targets from configured `@target` feeds and publishes
+> CPA, TCPA, bow crossing and bearings for each target in range. It commands nothing. See
+> [TODO.md](TODO.md) and [docs/PLAN.md](docs/PLAN.md).
 
 ## What it will do
 
@@ -48,6 +49,17 @@ processor refuses to start without them, and refuses simulator `truth` sources.
 | out | `route_execution/{voyage_id}` | 1 Hz. For a declared route the token is `declared-{source}` and `voyage_id` is empty |
 | out | `envelope_exceedance/{voyage_id}/{exceedance_id}` | Voyages only. Opened on breach, restated in full on close |
 | out | `alarm/navigation/0/route_monitor` | Deviation, envelope, no position, dangling route. Cleared by publishing an expired alarm |
+
+## What traffic reads and writes
+
+| Direction | Key | Notes |
+|---|---|---|
+| in | `{feed entity}/pubsub/{subject}/{feed source}/@target/*` | Position, COG, SOG, heading, nav status, name, dimensions. Newest receipt wins across feeds |
+| out | `{entity_id}/pubsub/target_cpa_m/navigation/0/traffic/@target/{target_id}` | Also `target_tcpa_s`, `target_bcr_m`, `target_bct_s`, `target_bearing_north_deg`, `target_bearing_relative_deg`. 1 Hz, targets in range only, and only values that are defined |
+
+CPA uses the same local frame as Crowsnest's `computeCPA`, so values compare directly. A course or
+speed that was never reported gives no CPA rather than an assumed one. Target positions are
+dead-reckoned from receipt to now; set `traffic.dead_reckon: false` to match Crowsnest exactly.
 
 Watch it:
 

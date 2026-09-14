@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from ..bus.codec import rfc3339
+from ..outputs import Emit
 from ..world.latch import fresh
 from ..world.model import WorldSnapshot
 from ..world.route import RouteRef
@@ -15,13 +16,6 @@ from .progress import Progress, ProgressConfig, ProgressTracker
 from .select import Selection
 
 MODULE = "route_monitor"
-
-
-@dataclass(frozen=True)
-class Emit:
-    subject: str
-    payload: dict
-    source_id: str | None = None  # None: the module's own source id
 
 
 @dataclass(frozen=True)

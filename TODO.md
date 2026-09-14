@@ -3,9 +3,12 @@
 Single source of truth for **pending** work, as a checklist. Completed items are pruned; `git log`
 has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is its phase checklist.
 
-**Status:** Phases 0 and 1 are done. Route monitoring publishes `route_execution`,
-`envelope_exceedance` and alarms, verified live against Slipway's `slipway-alpha` on 2026-09-14
-(1.00 s interval, `route_execution/declared-sim`, `MODE_READY`). Phase 2 is next.
+**Status:** Phases 0, 1 and 2 are done. Route monitoring publishes `route_execution`,
+`envelope_exceedance` and alarms (live against Slipway `slipway-alpha`: 1.00 s interval,
+`MODE_READY`). Traffic publishes per-target CPA under `@target` (live with real AIS from
+`maritimedb`: 110 targets in 12 NM, zero errors; 2,550 of 2,554 published CPAs within the
+dead-reckoning bound of Crowsnest's formula recomputed from the raw inputs, median difference 0 m).
+Phase 3 is next.
 
 ## Invariants (read before touching anything)
 
@@ -24,13 +27,8 @@ has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is it
 - Inputs name their `source_id` explicitly; `truth` sources are refused. Freshness is judged on local receipt time.
 - Alarm descriptions must be stable while the condition holds: a changed description republishes immediately.
 - `envelope_exceedance` is published only with a voyage; a declared route has none.
-
-## Phase 2 — traffic + CPA
-
-- [ ] `world/targets.py`: `TargetTable` from `.../{subject}/*/@target/**` for `location_fix`, `course_over_ground_deg`, `speed_over_ground_knots`, `heading_true_north_deg`, `nav_status`, `vessel_type`, `length_over_all_m`, `breadth_over_all_m`; staleness expiry by AIS class / nav_status
-- [ ] `traffic/cpa.py`: port `crowsnest-dev/src/utils/cpaCalculation.js` (relative motion in local frame); add BCR/BCT
-- [ ] Publish `target_cpa_m`, `target_tcpa_s`, `target_bcr_m`, `target_bct_s`, `target_bearing_north_deg`, `target_bearing_relative_deg` under `@target/{id}`
-- [ ] Unit tests against Crowsnest fixtures; **acceptance**: numbers match the bearing-rate table
+- `maritimedb` AIS stamps each report at publish time, not transmission time: the timestamp carries no report age. Dead-reckon targets from local receipt.
+- Traffic publishes only defined values: no CPA from an unreported course or speed, no bow crossing astern.
 
 ## Phase 3 — COLREG advisor (advisory only)
 
@@ -83,8 +81,11 @@ has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is it
 
 - [ ] With the processor running against `slipway-alpha`, confirm Crowsnest's Route tab chip reads *From vessel* (it reads `route_execution/*`, keyed by vessel, stale after 5 s, and rejects a different route id). Checked on the wire, not in a browser
 - [ ] Decide whether `route_execution` for a declared route should be keyed `declared-{source}` or wait for a voyage (see Open questions)
+- [ ] Compare CPA/TCPA in Crowsnest's chart hover against this processor for the same targets. Needs own ship set to Slipway Alpha in Crowsnest's Own Ship Selector; not changed by the agent because the current selection could not be read back reliably to restore
 
 ## Open questions
+
+- [ ] Live CPA cross-check: 4 of 2,554 values exceeded the dead-reckoning bound (up to 455 m). Most likely a target course update between the processor's snapshot and the checker's; not confirmed
 
 - [ ] A declared route has no voyage, so its execution is keyed `route_execution/declared-{source}` with an empty `voyage_id`. Raise upstream alongside the two-key-shapes ask (crowsnest-dev NAVIGATION-DECISION-SERVICES §6.2)
 - [ ] `RouteExecution.speed_over_ground_knots` and `course_over_ground_deg` are not `optional`, so an unknown SOG reads as 0 kn. Ask keelson for presence

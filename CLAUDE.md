@@ -6,9 +6,10 @@ A keelson processor that owns navigation of an autonomous vessel under automatio
 monitoring, traffic and CPA, COLREG advice, guidance, the navigation state machine and the
 decision log. One repo and image, one `source_id` per module (`{source_base}/{module}`).
 
-**Status:** Phase 1 done, verified live against Slipway `slipway-alpha`. Route monitoring
-publishes `route_execution`, `envelope_exceedance` and alarms; `navigation_state` is READY while
-monitoring. Commands nothing. Next is Phase 2, traffic and CPA.
+**Status:** Phase 1 done and Phase 2 code complete, both verified live against Slipway
+`slipway-alpha` (Phase 2 with real AIS from `maritimedb`). Route monitoring publishes
+`route_execution`, `envelope_exceedance` and alarms; traffic publishes per-target CPA under
+`@target`. Commands nothing.
 
 ## Where to look
 
@@ -32,6 +33,9 @@ src/nav/
   bus/translate.py  keelson protobuf -> plan and sample types (proto3 presence kept)
   world/            RoutePlan/VoyagePlan, newest-wins Latch (local receipt time), World snapshot
   route_monitor/    geodesy, select (which route), progress, envelope, alarms, monitor (per tick)
+  traffic/          cpa (flat frame, matches Crowsnest), monitor (range filter, per-target outputs)
+  world/targets.py  TargetTable: newest receipt per subject per target, expiry by position age
+  outputs.py        Emit: subject, payload, optional source_id and target_id
   conduct/state.py  NavigationState, mirrors docs/upstream/NavigationState.proto
 ```
 
@@ -52,3 +56,5 @@ docker compose up --build
 - Tests never touch the shared router. e2e sessions disable multicast and connect nowhere.
 - keelson SDK is the monorepo one (`../keelson/sdks/python`), installed editable.
 - ruff, line length 100.
+- Scripted edits must assert the old text exists. An unasserted replace that silently missed once
+  published targets on the wrong keys; only the e2e test caught it.

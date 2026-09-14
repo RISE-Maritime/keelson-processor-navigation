@@ -138,3 +138,32 @@ def test_route_monitor_section_merges_over_defaults(tmp_path):
     conf = config_mod.load(ns(config=path))
     assert conf["route_monitor"]["execution_hz"] == 2
     assert conf["route_monitor"]["alarms"] is True
+
+
+def test_traffic_needs_feeds(tmp_path):
+    path = _write(
+        tmp_path, "entity_id: v\nmodules:\n  traffic: true\ninputs:\n  location_fix: gnss\n"
+    )
+    with pytest.raises(config_mod.ConfigError, match="traffic.feeds"):
+        config_mod.load(ns(config=path))
+
+
+@pytest.mark.parametrize(
+    "feed, match",
+    [
+        ("{entity: '*', source: ais}", "single literal key chunk"),
+        ("{entity: maritimedb, source: 'ais/*'}", "not a pattern"),
+        ("{entity: slipway-traffic, source: truth}", "ground truth"),
+        ("{entity: maritimedb}", "exactly entity and source"),
+    ],
+)
+def test_traffic_feeds_are_validated(tmp_path, feed, match):
+    path = _write(tmp_path, f"entity_id: v\ntraffic:\n  feeds:\n    - {feed}\n")
+    with pytest.raises(config_mod.ConfigError, match=match):
+        config_mod.load(ns(config=path))
+
+
+def test_example_traffic_feeds_are_maritimedb():
+    conf = config_mod.load(ns(config=str(ROOT / "config" / "processor.example.yaml")))
+    assert {f["entity"] for f in conf["traffic"]["feeds"]} == {"maritimedb"}
+    assert conf["modules"]["traffic"] is True

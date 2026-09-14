@@ -80,13 +80,21 @@ def _measured_ns(msg) -> int | None:
 
 
 def sample(msg, received_ns: int, source_id: str) -> Sample:
-    """A measured input: foxglove.LocationFix -> (lat, lon); Timestamped* -> value."""
+    """A measured input as a Sample.
+
+    LocationFix -> (lat, lon); VesselNavStatus -> enum name; Timestamped* -> value.
+    """
     name = msg.DESCRIPTOR.full_name
+    fields = msg.DESCRIPTOR.fields_by_name
     if name == "foxglove.LocationFix":
         if not (math.isfinite(msg.latitude) and math.isfinite(msg.longitude)):
             raise TranslateError("location fix is not finite")
         value = (msg.latitude, msg.longitude)
-    elif "value" in msg.DESCRIPTOR.fields_by_name:
+    elif name == "keelson.VesselNavStatus":
+        value = fields["navigation_status"].enum_type.values_by_number[msg.navigation_status].name
+    elif "value" in fields and fields["value"].type == fields["value"].TYPE_STRING:
+        value = msg.value
+    elif "value" in fields:
         value = float(msg.value)
         if not math.isfinite(value):
             raise TranslateError(f"{name} value is not finite")

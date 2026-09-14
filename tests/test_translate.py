@@ -67,3 +67,10 @@ def test_samples():
 
     with pytest.raises(translate.TranslateError):
         translate.sample(cls("keelson.TimestampedFloat")(value=float("nan")), 1, "sim")
+
+
+def test_string_and_nav_status_samples():
+    name = cls("keelson.TimestampedString")(value="STENA DANICA")
+    assert translate.sample(name, 1, "ais").value == "STENA DANICA"
+    status = cls("keelson.VesselNavStatus")(navigation_status=2)
+    assert translate.sample(status, 1, "ais").value == "AT_ANCHOR"

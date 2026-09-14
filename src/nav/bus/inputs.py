@@ -11,6 +11,7 @@ import logging
 import time
 
 from ..world.model import World
+from ..world.targets import TARGET_SUBJECTS
 from . import translate
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,21 @@ def pubsub_tail(key: str) -> tuple[str, list[str]] | None:
 
 
 class Inputs:
-    def __init__(self, session, conf: dict, world: World, *, need_routes: bool, clock=time.time_ns):
+    def __init__(
+        self,
+        session,
+        conf: dict,
+        world: World,
+        *,
+        need_routes: bool,
+        need_targets: bool = False,
+        clock=time.time_ns,
+    ):
         self.session = session
         self.conf = conf
         self.world = world
         self.need_routes = need_routes
+        self.need_targets = need_targets
         self.clock = clock
         self._subscribers = []
         self._warned: set[str] = set()
@@ -53,6 +64,11 @@ class Inputs:
             self._subscribe(route_key, lambda s: self._on_route(s, live=True))
         for subject, source in sorted(self.conf["inputs"].items()):
             self._subscribe(self._key(subject, source), self._input_handler(subject))
+        if self.need_targets:
+            for feed in self.conf["traffic"]["feeds"]:
+                for subject in TARGET_SUBJECTS:
+                    key = self._target_key(feed["entity"], subject, feed["source"])
+                    self._subscribe(key, self._target_handler(feed, subject), label=key)
 
         if self.need_routes:
             for selector, handler in (
@@ -71,16 +87,26 @@ class Inputs:
             sub.undeclare()
         self._subscribers.clear()
 
-    def _subscribe(self, key: str, handler) -> None:
-        self._subscribers.append(self.session.declare_subscriber(key, self._guard(handler)))
+    def _target_key(self, entity: str, subject: str, source: str) -> str:
+        import keelson
+
+        return keelson.construct_pubsub_key(
+            self.conf["realm"], entity, subject, source, target_id="*"
+        )
+
+    def _subscribe(self, key: str, handler, label: str | None = None) -> None:
+        self._subscribers.append(self.session.declare_subscriber(key, self._guard(handler, label)))
         logger.info("Subscribed %s", key)
 
-    def _guard(self, handler):
+    def _guard(self, handler, label: str | None = None):
+        """``label`` names rejections by subscription instead of by key, so a feed of hundreds of
+        targets sending one bad subject records one rejection, not hundreds."""
+
         def wrapped(sample):
             try:
                 handler(sample)
             except Exception as exc:  # a bad message must not kill the subscriber thread
-                key = str(sample.key_expr)
+                key = label or str(sample.key_expr)
                 self.world.reject(key, str(exc))
                 if key not in self._warned:
                     self._warned.add(key)
@@ -124,6 +150,22 @@ class Inputs:
             plan = translate.route_plan(self._decode(sample, "route"))
             self.world.put_declared(rest[0], plan, self.clock(), live)
         # route/{id}/latest is deliberately unused: a voyage pins an edition, never latest.
+
+    def _target_handler(self, feed: dict, subject: str):
+        source = f"{feed['entity']}/{feed['source']}"
+
+        def handle(sample):
+            key = str(sample.key_expr)
+            _, sep, target_id = key.partition("/@target/")
+            if not sep or not target_id or "/" in target_id:
+                return
+            self.world.targets.put(
+                target_id,
+                subject,
+                translate.sample(self._decode(sample, subject), self.clock(), source),
+            )
+
+        return handle
 
     def _input_handler(self, subject: str):
         def handle(sample):

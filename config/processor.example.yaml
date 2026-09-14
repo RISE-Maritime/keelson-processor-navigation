@@ -21,7 +21,7 @@ state_hz: 1
 # Enabling a module that is not implemented in this version is a configuration error.
 modules:
   route_monitor: true
-  traffic: false
+  traffic: true
   colreg: false
   guidance: false
   conduct: true
@@ -57,3 +57,20 @@ route_monitor:
   alarms: true
   alarm_republish_s: 5
   alarm_ttl_s: 15
+
+traffic:
+  # Where targets come from: an entity and a source publishing under @target. Real AIS on the RISE
+  # bus is published under entity maritimedb. A Slipway run with background traffic publishes
+  # its contacts under its own traffic entity instead.
+  feeds:
+    - entity: maritimedb
+      source: srv-herakles/sjofartsverket
+    - entity: maritimedb
+      source: digitraffic
+  range_limit_m: 22224             # 12 NM; targets beyond are not published
+  range_exit_factor: 1.1           # a target leaves only beyond 1.1 x the limit
+  target_max_age_s: 180            # position older than this: target dropped
+  static_max_age_s: 1800           # name and dimensions (AIS msg 5 every 6 min)
+  publish_hz: 1
+  dead_reckon: true                # move each target along its reported velocity since receipt
+  exclude_targets: []              # e.g. [mmsi_265000000], this vessel's own AIS

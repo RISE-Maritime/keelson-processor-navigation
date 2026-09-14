@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 MODULES = ("route_monitor", "traffic", "colreg", "guidance", "conduct", "decision_log")
 
 # Enabling any other module is refused, never ignored.
-IMPLEMENTED_MODULES = frozenset({"conduct", "route_monitor"})
+IMPLEMENTED_MODULES = frozenset({"conduct", "route_monitor", "traffic"})
 
 CODECS = ("rider", "proto")
 
@@ -27,7 +27,7 @@ OWNSHIP_INPUTS = (
     "course_over_ground_deg",
     "speed_over_ground_knots",
 )
-REQUIRED_INPUTS = {"route_monitor": ("location_fix",)}
+REQUIRED_INPUTS = {"route_monitor": ("location_fix",), "traffic": ("location_fix",)}
 
 ROUTE_MONITOR_DEFAULTS = {
     "execution_hz": 1.0,
@@ -46,6 +46,17 @@ ROUTE_MONITOR_DEFAULTS = {
     "alarm_ttl_s": 15.0,
 }
 
+TRAFFIC_DEFAULTS = {
+    "feeds": [],
+    "range_limit_m": 12 * 1852.0,
+    "range_exit_factor": 1.1,
+    "target_max_age_s": 180.0,
+    "static_max_age_s": 1800.0,
+    "publish_hz": 1.0,
+    "dead_reckon": True,
+    "exclude_targets": [],
+}
+
 DEFAULTS: dict = {
     "realm": "rise",
     "entity_id": None,
@@ -56,10 +67,11 @@ DEFAULTS: dict = {
     "modules": {m: m == "conduct" for m in MODULES},
     "inputs": {},
     "route_monitor": dict(ROUTE_MONITOR_DEFAULTS),
+    "traffic": copy.deepcopy(TRAFFIC_DEFAULTS),
 }
 
 _CLI_OVERRIDES = ("realm", "entity_id", "source_base", "codec")
-_MERGED_SECTIONS = ("modules", "route_monitor")
+_MERGED_SECTIONS = ("modules", "route_monitor", "traffic")
 
 
 class ConfigError(ValueError):
@@ -111,6 +123,7 @@ def _validate(conf: dict) -> None:
 
     _validate_inputs(conf)
     _validate_route_monitor(conf)
+    _validate_traffic(conf)
 
 
 def _validate_inputs(conf: dict) -> None:
@@ -127,7 +140,7 @@ def _validate_inputs(conf: dict) -> None:
             raise ConfigError(f"inputs.{subject} must be a non-empty source_id")
         if "**" in source or "@" in source:
             raise ConfigError(f"inputs.{subject} must name a source, not a key pattern: {source!r}")
-        if source == "truth" or source.endswith("/truth"):
+        if _is_truth(source):
             raise ConfigError(
                 f"inputs.{subject} reads {source!r}: simulator ground truth is not an input "
                 "for software under test; use the operational source"
@@ -162,6 +175,47 @@ def _validate_route_monitor(conf: dict) -> None:
         raise ConfigError("route_monitor.alarm_ttl_s must exceed alarm_republish_s")
     if rm["execution_hz"] > conf["tick_hz"]:
         raise ConfigError("route_monitor.execution_hz cannot exceed tick_hz")
+
+
+def _is_truth(source: str) -> bool:
+    return source == "truth" or source.endswith("/truth")
+
+
+def _validate_traffic(conf: dict) -> None:
+    tr = conf.get("traffic")
+    if not isinstance(tr, dict):
+        raise ConfigError("traffic must be a mapping")
+    unknown = set(tr) - set(TRAFFIC_DEFAULTS)
+    if unknown:
+        raise ConfigError(f"unknown traffic setting(s): {sorted(unknown)}")
+    feeds = tr["feeds"]
+    if not isinstance(feeds, list):
+        raise ConfigError("traffic.feeds must be a list of {entity, source}")
+    for i, feed in enumerate(feeds):
+        if not isinstance(feed, dict) or set(feed) != {"entity", "source"}:
+            raise ConfigError(f"traffic.feeds[{i}] must have exactly entity and source")
+        entity, source = feed["entity"], feed["source"]
+        if not isinstance(entity, str) or not entity or "/" in entity or "*" in entity:
+            raise ConfigError(f"traffic.feeds[{i}].entity must be a single literal key chunk")
+        if not isinstance(source, str) or not source or "*" in source or "@" in source:
+            raise ConfigError(f"traffic.feeds[{i}].source must name a source, not a pattern")
+        if _is_truth(source):
+            raise ConfigError(f"traffic.feeds[{i}] reads simulator ground truth ({source!r})")
+    for key in ("range_limit_m", "target_max_age_s", "static_max_age_s", "publish_hz"):
+        if not _positive(tr[key]):
+            raise ConfigError(f"traffic.{key} must be a positive number")
+    if not isinstance(tr["range_exit_factor"], (int, float)) or tr["range_exit_factor"] < 1:
+        raise ConfigError("traffic.range_exit_factor must be at least 1")
+    if not isinstance(tr["dead_reckon"], bool):
+        raise ConfigError("traffic.dead_reckon must be true or false")
+    if not isinstance(tr["exclude_targets"], list) or not all(
+        isinstance(x, str) and x for x in tr["exclude_targets"]
+    ):
+        raise ConfigError("traffic.exclude_targets must be a list of target ids")
+    if tr["publish_hz"] > conf["tick_hz"]:
+        raise ConfigError("traffic.publish_hz cannot exceed tick_hz")
+    if conf["modules"].get("traffic") and not feeds:
+        raise ConfigError("module 'traffic' needs at least one traffic.feeds entry")
 
 
 def load(args=None) -> dict:

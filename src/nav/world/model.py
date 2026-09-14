@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from .latch import Latch, Sample
 from .route import RoutePlan, VoyagePlan
+from .targets import TargetTable
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class World:
         self._declared: dict[str, Declared] = {}
         self._rejected: dict[str, str] = {}
         self.inputs = Latch()
+        self.targets = TargetTable()
 
     def put_voyage(self, voyage: VoyagePlan) -> None:
         with self._lock:

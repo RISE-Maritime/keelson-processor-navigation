@@ -25,3 +25,11 @@ def monitor_conf(conf) -> dict:
         "true_wind_speed_mps": "wx",
     }
     return conf
+
+
+@pytest.fixture
+def traffic_conf(monitor_conf) -> dict:
+    monitor_conf["modules"]["traffic"] = True
+    monitor_conf["inputs"]["heading_true_north_deg"] = "sim"
+    monitor_conf["traffic"]["feeds"] = [{"entity": "nav-test-ais", "source": "ais"}]
+    return monitor_conf

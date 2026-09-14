@@ -14,6 +14,9 @@ from .conduct.state import Mode, NavigationState, RouteRef
 from .route_monitor.monitor import MODULE as ROUTE_MONITOR
 from .route_monitor.monitor import RouteMonitor
 from .route_monitor.select import Selection, select
+from .traffic.monitor import MODULE as TRAFFIC
+from .traffic.monitor import PUBLISHED_SUBJECTS as TRAFFIC_SUBJECTS
+from .traffic.monitor import TrafficMonitor
 from .world.model import World
 
 
@@ -23,6 +26,7 @@ class Output:
     subject: str
     payload: dict
     source_id: str | None = None  # None: the module's own source id
+    target_id: str | None = None  # set: published under .../@target/{target_id}
 
 
 class Processor:
@@ -32,6 +36,7 @@ class Processor:
         self._state_period_ns = int(1e9 / conf["state_hz"])
         self._next_state_ns: int | None = None
         self.monitor = RouteMonitor(conf, id_factory) if self.enabled(ROUTE_MONITOR) else None
+        self.traffic = TrafficMonitor(conf) if self.enabled(TRAFFIC) else None
         self.selection = Selection(None, "not started")
 
     def enabled(self, module: str) -> bool:
@@ -41,6 +46,14 @@ class Processor:
     def needs_routes(self) -> bool:
         return self.enabled(ROUTE_MONITOR) or self.enabled("conduct")
 
+    @property
+    def needs_targets(self) -> bool:
+        return self.traffic is not None
+
+    def target_publications(self) -> dict[str, tuple[str, ...]]:
+        """Subjects each module publishes under ``@target``; they also get a target-scoped token."""
+        return {TRAFFIC: TRAFFIC_SUBJECTS} if self.traffic is not None else {}
+
     def publications(self) -> dict[str, tuple[str, ...]]:
         """Subjects each enabled module publishes under its own source id. Keys whose source slot
         carries an id (route_execution, envelope_exceedance) are reported by ``dynamic_keys``."""
@@ -49,6 +62,7 @@ class Processor:
             pubs["conduct"] = ("navigation_state",)
         if self.monitor is not None:
             pubs[ROUTE_MONITOR] = ("alarm",) if self.conf["route_monitor"]["alarms"] else ()
+        pubs.update(self.target_publications())
         return pubs
 
     def dynamic_keys(self) -> set[tuple[str, str]]:
@@ -70,6 +84,15 @@ class Processor:
             outputs += [
                 Output(ROUTE_MONITOR, e.subject, e.payload, e.source_id)
                 for e in self.monitor.step(snapshot, self.selection, now_ns)
+            ]
+        if self.traffic is not None:
+            tr = self.conf["traffic"]
+            targets = self.world.targets.snapshot(
+                now_ns, tr["target_max_age_s"], tr["static_max_age_s"]
+            )
+            outputs += [
+                Output(TRAFFIC, e.subject, e.payload, e.source_id, e.target_id)
+                for e in self.traffic.step(snapshot, targets, now_ns)
             ]
         if self.enabled("conduct") and (
             self._next_state_ns is None or now_ns >= self._next_state_ns

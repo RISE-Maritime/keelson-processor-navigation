@@ -84,7 +84,7 @@ def run(session, conf: dict, stop) -> None:
     threading.Event in tests (signal handlers can only be installed on the main thread).
     """
     import keelson
-    from keelson.scaffolding import declare_liveliness
+    from keelson.scaffolding import declare_liveliness, put
 
     from .bus.codec import Codec
     from .bus.inputs import Inputs
@@ -94,8 +94,8 @@ def run(session, conf: dict, stop) -> None:
     codec = Codec(conf["codec"])
     processor = Processor(conf)
 
-    def key(subject: str, source_id: str) -> str:
-        return keelson.construct_pubsub_key(realm, entity_id, subject, source_id)
+    def key(subject: str, source_id: str, target_id: str | None = None) -> str:
+        return keelson.construct_pubsub_key(realm, entity_id, subject, source_id, target_id)
 
     with ExitStack() as stack:
         for module, subjects in processor.publications().items():
@@ -105,12 +105,30 @@ def run(session, conf: dict, stop) -> None:
                 declare_liveliness(session, realm, entity_id, source_id, pubsub_subjects=wire)
             )
 
+        # Target-scoped subject tokens (keelson-target-liveliness proposal): declared in addition
+        # to the plain token, because no wildcard crosses @target.
+        target_tokens = _DynamicTokens(session)
+        stack.callback(target_tokens.close)
+        target_tokens.set(
+            {
+                key(codec.wire_subject(s), config_mod.module_source_id(conf, module), "*")
+                for module, subjects in processor.target_publications().items()
+                for s in subjects
+            }
+        )
+
         publishers = _Publishers(session)
         stack.callback(publishers.close)
         tokens = _DynamicTokens(session)
         stack.callback(tokens.close)
 
-        inputs = Inputs(session, conf, processor.world, need_routes=processor.needs_routes)
+        inputs = Inputs(
+            session,
+            conf,
+            processor.world,
+            need_routes=processor.needs_routes,
+            need_targets=processor.needs_targets,
+        )
         stack.callback(inputs.close)
         inputs.start()
 
@@ -121,9 +139,12 @@ def run(session, conf: dict, stop) -> None:
                 wire = codec.wire_subject(out.subject)
                 source_id = out.source_id or config_mod.module_source_id(conf, out.module)
                 try:
-                    publishers.put(
-                        key(wire, source_id), wire, codec.encode(out.subject, out.payload)
-                    )
+                    data = codec.encode(out.subject, out.payload)
+                    if out.target_id is not None:
+                        # One key per target: a one-shot put, not a cached publisher per target.
+                        put(session, key(wire, source_id, out.target_id), data)
+                    else:
+                        publishers.put(key(wire, source_id), wire, data)
                 except Exception:
                     logger.exception("Failed to publish %s from %s", out.subject, out.module)
             tokens.set({key(s, src) for s, src in processor.dynamic_keys()})
