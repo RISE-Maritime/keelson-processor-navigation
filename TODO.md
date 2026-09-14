@@ -8,7 +8,7 @@ has the record. The full design is [docs/PLAN.md](docs/PLAN.md); this file is it
 Crowsnest). Traffic publishes per-target CPA under `@target` (live with real AIS; matches Crowsnest's
 formula). The COLREG advisor publishes encounters, advice and dispositions and commands nothing
 (accepted against Slipway's `rivo-crossing` replayed in-process). Draft keelson payloads compile on a
-local keelson branch and the processor's payloads parse into them. Phase 4, guidance, is next.
+local keelson branch and the processor's payloads parse into them. Phase 4 guidance and the conduct state machine command the vessel over `vehicle_control/v1`, accepted in-process on Slipway's kernel; not yet run on a shared bus.
 
 ## Invariants (read before touching anything)
 
@@ -36,26 +36,22 @@ local keelson branch and the processor's payloads parse into them. Phase 4, guid
 
 ## Phase 4 — guidance backend A + conduct FSM
 
-Guidance replaces `keelson-processor-autopilot` on any vessel it drives (decision 2026-09-14, see Needs a person). Consequences for this phase:
+Built (`aee6787`). Guidance replaces `keelson-processor-autopilot` on any vessel it drives. Accepted in-process on Slipway's kernel, `two-vessel-harbor` with alpha COMMANDED (`tests/test_acceptance_slipway_guidance.py`, run in Slipway's env):
+- She sailed the lap in 1145 s with worst cross-track 30.0 m against 50 m.
+- Pulling the lease stopped her 0.2 s later.
+- A stalled processor was caught by the kernel dead-man after 1.7 s.
 
-- [ ] Never share a vessel with a running `keelson-processor-autopilot`: Slipway keeps one control mapping per vessel, last writer wins, and the autopilot re-installs itself whenever the mapping is empty. Documented under README Deployment
-- [ ] On start, `get_control_mapping`: if axes are mapped to another source, do not take the helm; publish `navigation_state` with the reason and raise an alarm. Never overwrite another controller's mapping silently
-- [ ] Publish axes at 10–20 Hz on a dedicated timer (the contract's rate; the autopilot's 5 Hz is below it)
-- [ ] Slipway scenario `alpha-navigation`, modelled on `alpha-autopilot.yaml`, requiring `slipway-alpha` / `navigation/0/guidance` / `joystick_x_pct` instead of `autopilot` / `wheel_position_pct`. Run in-process first; on the bus only with the autopilot container stopped
+Slipway scenario `alpha-navigation` is on Slipway's local `main` (`23e97f5`), not pushed.
+
+- [ ] **Live run on the RISE bus**: Slipway `alpha-navigation` with `config/slipway-alpha-guidance.yaml`, and the autopilot container for slipway-alpha stopped. Needs a person: it commands a vessel on the shared router
+- [ ] Slipway capability probes take a single-chunk `source_id` (`scenario.schema.json`: `^[a-z0-9][a-z0-9_-]*$`), so `alpha-navigation` cannot require the processor before the clock moves the way `alpha-autopilot` requires its autopilot. Ask Slipway to accept keelson's multi-chunk source ids
+- [ ] Add `NavigationSetpoint` and `NavigationDecision` to RISE-Maritime/keelson#260 (drafts in `docs/upstream/`, text in `docs/UPSTREAM-ASKS.md`). Needs a person: it pushes to GitHub
+- [ ] Speed policy: no UKC slow-down (no depth input is read yet) and no ETA hold
+- [ ] Auto-acceptance of advice is a config flag. docs/PLAN.md also wants `task_allocation[NAV-05].DEC` to name this processor, which arrives with Phase 7
+- [ ] On shutdown guidance goes silent, so the dead-man stops the hull, but the lease is not released; it lapses after `lease_ttl_s`. Release it on a clean shutdown
+- [ ] `ControlAxisMapping` carries no token, so installing the mapping is read-then-write and another controller can land between the poll and the set. keelson ask (docs/PLAN.md §7)
+- [ ] Gains are sized for Slipway's L0 alpha, which turns at its demanded rate within a tick. Tune per platform on a hull with inertia (Slipway's L1 ferry) before a real one
 - [ ] Open: backend B (`vehicle_navigation/v1`) for real ArduPilot hulls has no Slipway counterpart to test against
-
-- [ ] `bus/lease.py`: `CommandAuthority` client — request, take (token), heartbeat, release with same token; receiver-clock lapse; `command_request` publishing
-- [ ] `guidance/backends/axes.py`: `vehicle_control/v1 set_control_mapping` (`steering`/`throttle`), publish `joystick_x_pct`/`joystick_y_pct` at 10–20 Hz on a dedicated timer repeating last setpoint
-- [ ] `guidance/track.py`: XTE + heading controller (start from `keelson-processor-autopilot` dead-reckoned PID), wheel-over from `Waypoint.wheel_over_distance_m`, fly-by turn per `Waypoint.radius_m`, return-to-track
-- [ ] `guidance/speed.py`: planned SOG per leg with defaults, `Leg.sog_min/max`, slow-down for UKC / visibility / accepted advice, ETA hold
-- [ ] `guidance/failsafe.py`: neutral burst for `neutral_burst_s` then silence
-- [ ] `conduct/fsm.py`: IDLE → READY → UNDERWAY{TRACK, AVOIDING, HOLDING, REROUTING} → ARRIVED/ENDED; FALLBACK on lease lapse / ceiling drop / stale inputs
-- [ ] `conduct/authority.py`: gates on `OperationalAuthority.level` and conn; auto-accept policy per level
-- [ ] `log/decision_log.py`: `navigation_decision/{voyage_id}/{decision_id}` append + 30 s snapshot
-- [ ] Publish `navigation_state` (1 Hz), `navigation_setpoint`
-- [ ] Unit: FSM guard matrix (every state × every input), lease clock rule with skewed `expires_at`
-- [ ] Integration: backend goes silent on FALLBACK; heartbeat cadence
-- [ ] **Acceptance**: Slipway vessel in COMMANDED mode sails `two-vessel-harbor.yaml` with XTD inside leg limits; pulling the lease stops her within the dead-man
 
 ## Phase 5 — SIL barrier participant
 
@@ -108,7 +104,6 @@ Guidance replaces `keelson-processor-autopilot` on any vessel it drives (decisio
 
 - [ ] A declared route has no voyage, so its execution is keyed `route_execution/declared-{source}` with an empty `voyage_id`. Raise upstream alongside the two-key-shapes ask (crowsnest-dev NAVIGATION-DECISION-SERVICES §6.2)
 - [ ] `RouteExecution.speed_over_ground_knots` and `course_over_ground_deg` are not `optional`, so an unknown SOG reads as 0 kn. Ask keelson for presence
-- [ ] `keelson-processor-autopilot` v0.2.0 already steers `slipway-alpha` via `wheel_position_pct` + `--install-control-mapping` (keelson-platforms). Phase 4 must decide: replace it, or feed it
 
 - [ ] CPA/TCPA thresholds and safe-passing distance per `OperationalContext`
 - [ ] Auto-accept advice at `ASSISTED_AUTONOMOUS` (below DANGER) or only at `FULL_AUTONOMOUS`?
