@@ -85,6 +85,8 @@ Phase 3 is next.
 
 ## Open questions
 
+- [ ] keelson upstream: `scaffolding.GracefulShutdown` logs from inside its signal handler. Two signals at once (a `timeout` wrapper forwarding one) raised `RuntimeError: reentrant call inside BufferedWriter` on stderr during a live run's shutdown on 2026-09-14. Shutdown still completed. Signal-safe fix: set the event in the handler and log from the main loop
+
 - [ ] Live CPA cross-check: 4 of 2,554 values exceeded the dead-reckoning bound (up to 455 m). Most likely a target course update between the processor's snapshot and the checker's; not confirmed
 
 - [ ] A declared route has no voyage, so its execution is keyed `route_execution/declared-{source}` with an empty `voyage_id`. Raise upstream alongside the two-key-shapes ask (crowsnest-dev NAVIGATION-DECISION-SERVICES §6.2)
