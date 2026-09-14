@@ -59,7 +59,8 @@ docker compose up --build
   enforces it. Nothing in colreg/ imports a vehicle interface.
 - A rider is published on its module's own `raw_json` key; ids travel in the payload.
 - `tests/fixtures/rivo_crossing.jsonl` is regenerated from the Slipway kernel in-process, never
-  from the shared bus.
+  from the shared bus, with `tools/rivo_crossing_fixture.py` (the command is in its docstring).
+  A regeneration against an unchanged trajectory must be byte-identical.
 - keelson SDK is the monorepo one (`../keelson/sdks/python`), installed editable.
 - ruff, line length 100.
 - Scripted edits must assert the old text exists. An unasserted replace that silently missed once
