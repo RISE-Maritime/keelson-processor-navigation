@@ -79,11 +79,17 @@ Phase 3 is next.
 
 ## Needs a person
 
-- [ ] With the processor running against `slipway-alpha`, confirm Crowsnest's Route tab chip reads *From vessel* (it reads `route_execution/*`, keyed by vessel, stale after 5 s, and rejects a different route id). Checked on the wire, not in a browser
+- [x] Crowsnest Route tab reads *From vessel* with the processor running against `slipway-alpha` (checked in the browser 2026-09-14: declared route, 4 WPs, leg 2/3, XTD 0 m of 50 m). It first showed *No active route* because Crowsnest's `remote_control_target_override_v1` still named `drone-sim-01`, which outranks the selected platform in `resolveVesselId`
 - [ ] Decide whether `route_execution` for a declared route should be keyed `declared-{source}` or wait for a voyage (see Open questions)
-- [ ] Compare CPA/TCPA in Crowsnest's chart hover against this processor for the same targets. Needs own ship set to Slipway Alpha in Crowsnest's Own Ship Selector; not changed by the agent because the current selection could not be read back reliably to restore
+- [x] Route chip provenance in the browser: *From vessel* with the processor running, *Computed here* after it stopped and the page reloaded. *Vessel quiet* (stop without reload) not captured: the Crowsnest tab froze
+- [ ] CPA/TCPA side by side with Crowsnest's Bearing app target list, time-aligned. Partial on 2026-09-14: one sample 8 s apart agreed (ANCHORED BULKER CPA 0.48/0.48 NM, rel. bearing 54°/50°, TCPA 1.0/1.2 min; NORDIC TRADER CPA 0.31/0.30 NM). A clean aligned run is still to do; the tab froze before it
+- [ ] Crowsnest state changed by the agent on 2026-09-14 with permission: own ship set to *Slipway Alpha (SIM)* and `remote_control_target_override_v1` set to `slipway-alpha` (it was `drone-sim-01`). Previous values are in localStorage key `claude_backup_before_slipway_alpha_20260914`; restore or delete it
 
 ## Open questions
+
+- [ ] crowsnest-dev: `remote_control_target_override_v1` outranks the selected platform in `resolveVesselId`, silently. A stale `drone-sim-01` made a selected `slipway-alpha` show *No active route* with the vessel declaring one
+- [ ] crowsnest-dev: the Bearing app listed a circling Slipway contact (NORDIC TRADER, `mmsi_999001001`) with COG 20° while its reported course swept 270°→204° over 16 s
+- [ ] Signalling a `timeout` wrapper delivered SIGINT twice to the processor ("forcing exit"). Run live checks without the wrapper and signal the Python pid
 
 - [ ] keelson upstream: `scaffolding.GracefulShutdown` logs from inside its signal handler. Two signals at once (a `timeout` wrapper forwarding one) raised `RuntimeError: reentrant call inside BufferedWriter` on stderr during a live run's shutdown on 2026-09-14. Shutdown still completed. Signal-safe fix: set the event in the handler and log from the main loop
 
