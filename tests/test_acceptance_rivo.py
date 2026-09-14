@@ -1,13 +1,13 @@
 """Phase 3 acceptance: Slipway's rivo-crossing, replayed through the whole processor.
 
 The fixture is the Slipway kernel run in-process (tests/fixtures/rivo_crossing.jsonl, one row per
-second): Alpha on 079.9 at 11 kn, Bravo on 024.8 at 6 kn on Alpha's starboard bow, background
-contact TARGET 1. Recorded from the kernel as it sails today, which is NOT what the scenario's
-comments describe (a 100 m pass at 277 s); Slipway's own test_rivo_crossing fails the same way. The
-recorded geometry is still a clean Rule 15 crossing: closest approach 394 m at t=420 s.
+second, 600 s) on the exercise as its comments describe it: Alpha due east at 8 kn from 1200 m west
+of the origin, Bravo due north at 6 kn from 775 m south, closest approach 100 m at t=277 s with
+Bravo crossing ahead. Regenerated after SLIPWAY branch fix/rivo-crossing-geometry restored that
+geometry (commit 1dfae03 had moved it).
 
-Alpha is own ship. Bravo and TARGET 1 are fed as targets, as an AIS receiver aboard Alpha would see
-them. Nobody steers: this is the advisory phase, so the advice keeps coming until the pass.
+Alpha is own ship. Bravo is fed as a target, as an AIS receiver aboard Alpha would see her. Nobody
+steers: this is the advisory phase, so the advice keeps coming until the pass.
 """
 
 from __future__ import annotations
@@ -100,9 +100,9 @@ def test_encounter_reaches_danger_and_closes_after_the_pass(run):
     ]
     opened_t = bravo[0][0]
     closes = [(t, p) for t, p in bravo if "closed_at" in p]
-    assert opened_t < 60, "a 395 m CPA 7 min out is inside coastal RISK from the start"
+    assert opened_t < 60, "a 100 m CPA under 5 min out is inside coastal RISK from the start"
     assert len(closes) == 1 and closes[0][1]["peak_risk"] == "RISK_DANGER"
-    assert 415 <= closes[0][0] <= 440, f"closed at {closes[0][0]} s; closest approach is at 420 s"
+    assert 272 <= closes[0][0] <= 300, f"closed at {closes[0][0]} s; closest approach is at 277 s"
 
 
 def test_first_advice_is_a_starboard_alteration_that_clears_bravo(run):
@@ -117,7 +117,7 @@ def test_first_advice_is_a_starboard_alteration_that_clears_bravo(run):
     assert "NO MANOEUVRE CLEARS" not in first["rationale"]
     assert "Not checked against the chart" in first["rationale"]
     # Recomputed independently from the fixture at the advice's own second: Bravo is cleared to
-    # the RISK distance, and TARGET 1 (a bystander on the starboard quarter) stays outside DANGER.
+    # the RISK distance, and any other target in the fixture stays outside DANGER.
     row = next(json.loads(x) for x in FIXTURE.read_text().splitlines() if json.loads(x)["t_s"] == t)
     a = row["vessels"]["slipway-alpha"]
     own_after = Kinematics(a["lat"], a["lon"], course, a["sog_knots"])
@@ -135,7 +135,7 @@ def test_first_advice_is_a_starboard_alteration_that_clears_bravo(run):
 def test_resume_track_follows_the_close_and_supersedes_the_avoidance(run):
     advice = colreg(run, "navigation_advice")
     resumes = [(t, p) for t, p in advice if p["kind"] == "KIND_RESUME_TRACK"]
-    assert resumes and resumes[0][0] >= 415
+    assert resumes and resumes[0][0] >= 272
     superseded = [
         p for _, p in colreg(run, "advice_disposition") if p["state"] == "STATE_SUPERSEDED"
     ]
