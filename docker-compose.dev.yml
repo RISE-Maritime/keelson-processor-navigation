@@ -3,8 +3,6 @@ services:
   navigation:
     build:
       context: .
-      additional_contexts:
-        keelson_sdk: ../keelson/sdks/python
       network: host
     init: true
     extra_hosts:

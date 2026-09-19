@@ -26,6 +26,7 @@ class SubMode(StrEnum):
     AVOIDING = "SUB_MODE_AVOIDING"
     HOLDING = "SUB_MODE_HOLDING"
     REROUTING = "SUB_MODE_REROUTING"
+    STEERING = "SUB_MODE_STEERING"  # holding an ordered course or heading, off the track
 
 
 # keelson.OperationalAuthority.AuthorityLevel names. UNKNOWN is non-authorising.
@@ -50,6 +51,9 @@ class NavigationState:
     authority_level_in_force: str = AUTHORITY_UNKNOWN
     conn_held: bool = False
     degraded_inputs: tuple[str, ...] = field(default_factory=tuple)
+    guidance_order: dict | None = (
+        None  # keelson.GuidanceOrder, protobuf JSON; absent with no voyage
+    )
 
     def to_payload(self) -> dict:
         """Protobuf JSON mapping. Defaults are emitted too: an explicit MODE_IDLE or
@@ -72,4 +76,6 @@ class NavigationState:
             }
         if self.current_leg_from_waypoint_id is not None:
             payload["current_leg_from_waypoint_id"] = self.current_leg_from_waypoint_id
+        if self.guidance_order is not None:
+            payload["guidance_order"] = self.guidance_order
         return payload

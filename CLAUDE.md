@@ -46,6 +46,9 @@ src/nav/
                     Actuation), failsafe, guide (orders + navigation_setpoint)
   log/decision_log.py  navigation_decision append + periodic restatement
   bus/vehicle_control.py  HelmBackend: axis timer and mapping RPCs, the only thing that drives
+  control/          navigation_control/v1: orders (GuidanceOrder), commands (who may call,
+                    load_route, voyages), decided in the tick
+  bus/control.py    the four queryables: decode, cross-vessel route fetch, queue, wait, encode
 ```
 
 ## Commands
@@ -72,7 +75,8 @@ cd ../SLIPWAY && PYTHONPATH=../keelson-processor-navigation/src:../keelson-proce
 - `tests/fixtures/rivo_crossing.jsonl` is regenerated from the Slipway kernel in-process, never
   from the shared bus, with `tools/rivo_crossing_fixture.py` (the command is in its docstring).
   A regeneration against an unchanged trajectory must be byte-identical.
-- keelson SDK is the monorepo one (`../keelson/sdks/python`), installed editable.
+- keelson is an exact published version pinned in `pyproject.toml` (now the keelson#282 alpha),
+  never the monorepo checkout: that checkout is on whatever branch another session left it.
 - ruff, line length 100.
 - The tick never publishes axes. It leaves `Processor.actuation`; `bus/vehicle_control.py` repeats
   it at 10-20 Hz and stops at `valid_until_ns`.

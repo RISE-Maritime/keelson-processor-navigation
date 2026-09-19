@@ -35,6 +35,8 @@ message NavigationDecision {
     KIND_MAPPING_REFUSED = 8;  // the vehicle_control mapping belonged to someone else
     KIND_MAPPING_RELEASED = 9;
     KIND_ADVICE_ACCEPTED = 10;
+    KIND_GUIDANCE_ORDER = 11;  // a navigation_control/v1 guidance order was taken up
+    KIND_VOYAGE_CHANGED = 12;  // a navigation_control/v1 call activated, re-pinned or ended a voyage
   }
 
   message Ownship {

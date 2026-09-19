@@ -14,11 +14,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-MODULES = ("route_monitor", "traffic", "colreg", "guidance", "conduct", "decision_log")
+MODULES = ("route_monitor", "traffic", "colreg", "guidance", "conduct", "decision_log", "control")
 
 # Enabling any other module is refused, never ignored.
 IMPLEMENTED_MODULES = frozenset(
-    {"conduct", "route_monitor", "traffic", "colreg", "guidance", "decision_log"}
+    {"conduct", "route_monitor", "traffic", "colreg", "guidance", "decision_log", "control"}
 )
 
 CODECS = ("rider", "proto")
@@ -127,6 +127,15 @@ GUIDANCE_DEFAULTS = {
     "min_sog_for_drift_knots": 1.0,
 }
 
+CONTROL_DEFAULTS = {
+    # Controllers that may direct this process while it holds the conn itself, without presenting
+    # a lease token: a scenario runner in simulation, a conduct service once one exists. Anyone
+    # holding the conn may always direct it. Empty: only the conn holder.
+    "controllers": [],
+    "reply_timeout_s": 3.0,  # how long a call waits for the tick to decide it
+    "fetch_timeout_s": 3.0,  # load_route: reading another vessel's route edition from storage
+}
+
 DECISION_LOG_DEFAULTS = {
     "snapshot_s": 30.0,
     "snapshot_count": 20,
@@ -147,6 +156,7 @@ DEFAULTS: dict = {
     "conduct": dict(CONDUCT_DEFAULTS),
     "guidance": dict(GUIDANCE_DEFAULTS),
     "decision_log": dict(DECISION_LOG_DEFAULTS),
+    "control": copy.deepcopy(CONTROL_DEFAULTS),
 }
 
 _CLI_OVERRIDES = ("realm", "entity_id", "source_base", "codec")
@@ -158,6 +168,7 @@ _MERGED_SECTIONS = (
     "conduct",
     "guidance",
     "decision_log",
+    "control",
 )
 
 
@@ -215,6 +226,7 @@ def _validate(conf: dict) -> None:
     _validate_conduct(conf)
     _validate_guidance(conf)
     _validate_decision_log(conf)
+    _validate_control(conf)
 
 
 def _section(conf: dict, name: str, defaults: dict) -> dict:
@@ -306,6 +318,20 @@ def _validate_decision_log(conf: dict) -> None:
         raise ConfigError("decision_log.snapshot_count must be a positive integer")
     if conf["modules"].get("decision_log") and not conf["modules"].get("conduct"):
         raise ConfigError("module 'decision_log' needs module 'conduct'")
+
+
+def _validate_control(conf: dict) -> None:
+    ct = _section(conf, "control", CONTROL_DEFAULTS)
+    controllers = ct["controllers"]
+    if not isinstance(controllers, list) or not all(isinstance(c, str) and c for c in controllers):
+        raise ConfigError("control.controllers must be a list of non-empty controller ids")
+    for key in ("reply_timeout_s", "fetch_timeout_s"):
+        if not _positive(ct[key]):
+            raise ConfigError(f"control.{key} must be a positive number")
+    if conf["modules"].get("control") and not conf["modules"].get("conduct"):
+        raise ConfigError(
+            "module 'control' needs module 'conduct': a caller is judged by the conn it holds"
+        )
 
 
 def controller_id(conf: dict) -> str:

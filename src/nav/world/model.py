@@ -29,12 +29,16 @@ class WorldSnapshot:
     declared: dict[str, Declared]
     inputs: dict[str, Sample]
     rejected: tuple[str, ...] = field(default_factory=tuple)
+    # The full Voyage record (protobuf JSON) by id, kept so a republish drops nothing.
+    voyage_docs: dict[str, dict] = field(default_factory=dict)
 
 
 class World:
     def __init__(self):
         self._lock = threading.Lock()
         self._voyages: dict[str, VoyagePlan] = {}
+        self._voyage_docs: dict[str, dict] = {}
+        self._commands: list = []
         self._editions: dict[tuple[str, int], RoutePlan] = {}
         self._declared: dict[str, Declared] = {}
         self._rejected: dict[str, str] = {}
@@ -45,9 +49,23 @@ class World:
         self.inputs = Latch()
         self.targets = TargetTable()
 
-    def put_voyage(self, voyage: VoyagePlan) -> None:
+    def put_voyage(self, voyage: VoyagePlan, doc: dict | None = None) -> None:
+        """``doc`` is the whole Voyage as protobuf JSON: navigation_control republishes a voyage
+        it transitions, and must not drop the fields it does not read (names, ports, policy)."""
         with self._lock:
             self._voyages[voyage.voyage_id] = voyage
+            if doc is not None:
+                self._voyage_docs[voyage.voyage_id] = doc
+
+    def put_command(self, pending) -> None:
+        """A navigation_control/v1 call waiting for the tick (control/commands.Pending)."""
+        with self._lock:
+            self._commands.append(pending)
+
+    def take_commands(self) -> list:
+        with self._lock:
+            out, self._commands = self._commands, []
+        return out
 
     def put_edition(self, plan: RoutePlan) -> None:
         # Editions are immutable (protocol-specification §6.3): the first copy wins.
@@ -108,6 +126,7 @@ class World:
         with self._lock:
             return WorldSnapshot(
                 voyages=dict(self._voyages),
+                voyage_docs=dict(self._voyage_docs),
                 editions=dict(self._editions),
                 declared=dict(self._declared),
                 inputs=self.inputs.snapshot(),

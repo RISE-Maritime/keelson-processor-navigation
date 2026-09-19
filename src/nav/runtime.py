@@ -22,6 +22,8 @@ from .conduct.authority import UNKNOWN, InForce, in_force, may_auto_accept, may_
 from .conduct.fsm import Conduct, Gates
 from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig
 from .conduct.state import Mode, NavigationState, RouteRef
+from .control.commands import Context, Controller, InvalidRequest, Outcome, Pending
+from .control.orders import TRACK
 from .guidance.axes import UNKNOWN as HELM_UNKNOWN
 from .guidance.axes import Actuation, ownership
 from .guidance.guide import MODULE as GUIDANCE
@@ -41,6 +43,7 @@ from .traffic.monitor import TrafficMonitor
 from .world.latch import fresh
 from .world.model import World
 
+CONTROL = "control"
 GUIDANCE_INPUTS = (
     "location_fix",
     "heading_true_north_deg",
@@ -96,6 +99,9 @@ class Processor:
         )
         self.authority = InForce(UNKNOWN, "not evaluated")
         self.guidance = Guidance(conf) if self.enabled(GUIDANCE) else None
+        self.controller = Controller(conf, id_factory) if self.enabled(CONTROL) else None
+        self.order = TRACK  # the guidance order in force (navigation_control/v1)
+        self._order_voyage: str | None = None  # the voyage it was given for
         self.decisions = DecisionLog(conf, id_factory) if self.enabled(DECISION_LOG) else None
         self.conn_held = False
         self._missing: tuple[str, ...] = ()
@@ -107,7 +113,7 @@ class Processor:
 
     @property
     def needs_routes(self) -> bool:
-        return self.enabled(ROUTE_MONITOR) or self.enabled("conduct")
+        return self.enabled(ROUTE_MONITOR) or self.enabled("conduct") or self.enabled(CONTROL)
 
     @property
     def needs_targets(self) -> bool:
@@ -160,14 +166,17 @@ class Processor:
         return {("route_execution", self.monitor.status.execution_key_token)}
 
     def tick(self, now_ns: int) -> list[Output]:
+        # navigation_control calls first, so this tick's route selection already sees them.
+        answered: list[tuple[Pending, Outcome]] = []
+        outputs: list[Output] = self._control_step(now_ns, answered) if self.controller else []
+
         snapshot = self.world.snapshot()
         self.selection = (
             select(snapshot, now_ns, self.conf["route_monitor"]["declared_stale_s"])
             if self.needs_routes
             else Selection(None, "no module needs routes")
         )
-
-        outputs: list[Output] = []
+        self._expire_order(now_ns)
         if self.monitor is not None:
             outputs += [
                 Output(ROUTE_MONITOR, e.subject, e.payload, e.source_id)
@@ -210,12 +219,92 @@ class Processor:
                     self._next_state_ns = now_ns
                 while self._next_state_ns <= now_ns:
                     self._next_state_ns += self._state_period_ns
+        if answered:
+            state = self._state(now_ns).to_payload()
+            for pending, outcome in answered:
+                pending.answer(_response(pending.procedure, outcome, state))
         if self.decisions is not None:
             outputs += [
                 Output(DECISION_LOG, e.subject, e.payload, e.source_id)
                 for e in self.decisions.step(now_ns)
             ]
         return outputs
+
+    # -- control -------------------------------------------------------------------------------
+
+    def _control_step(self, now_ns: int, answered: list) -> list[Output]:
+        pendings = self.world.take_commands()
+        if not pendings:
+            return []
+        # Hear leases first: a scenario that grants the conn and calls straight after must be
+        # judged against the grant, not the lease book of the previous tick.
+        for payload, received_ns in self.world.take_leases():
+            self.lease_book.hear(payload, received_ns)
+        source = config_mod.module_source_id(self.conf, CONTROL)
+        out: list[Output] = []
+        for pending in pendings:
+            snap = self.world.snapshot()  # fresh per call: a sequence sees its own effects
+            holder = self.lease_book.holder(now_ns)
+            ctx = Context(
+                now_ns=now_ns,
+                entity_id=self.conf["entity_id"],
+                voyages=snap.voyages,
+                voyage_docs=snap.voyage_docs,
+                editions=snap.editions,
+                holder_token=holder.token if holder is not None else None,
+                conn_held=self.lease.held(self.lease_book, now_ns),
+                guidance=self.guidance is not None,
+                order=self.order,
+            )
+            try:
+                outcome = self.controller.decide(pending, ctx)
+            except InvalidRequest as exc:
+                pending.refuse(str(exc))
+                continue
+            if outcome.accepted:
+                for plan, doc in outcome.editions:
+                    self.world.put_edition(plan)
+                    tail = f"{plan.route_id}/edition/{plan.edition}"
+                    out.append(Output(CONTROL, "route", doc, source_id=tail))
+                for route_id, doc in outcome.publish_latest:
+                    out.append(Output(CONTROL, "route", doc, source_id=f"{route_id}/latest"))
+                for voyage, doc in outcome.voyages:
+                    self.world.put_voyage(voyage, doc)
+                    out.append(Output(CONTROL, "voyage", doc, source_id=voyage.voyage_id))
+                for kind, summary in outcome.decisions:
+                    self._decide(now_ns, kind, source, summary)
+                if outcome.order is not None:
+                    self._take_order(outcome.order, outcome.voyage_id)
+            answered.append((pending, outcome))
+        return out
+
+    def _take_order(self, order, voyage_id: str | None) -> None:
+        previous, self.order, self._order_voyage = self.order, order, voyage_id
+        if self.guidance is not None:
+            plan = None
+            snap = self.world.snapshot()
+            voyage = snap.voyages.get(voyage_id) if voyage_id else None
+            if voyage is not None and voyage.route_ref is not None:
+                plan = snap.editions.get((voyage.route_ref.route_id, voyage.route_ref.edition))
+            self.guidance.take_order(order, previous, plan)
+
+    def _expire_order(self, now_ns: int) -> None:
+        """An order is given for a voyage. Once that voyage is no longer the one selected — ended,
+        paused, replaced by another station's publish — guidance returns to the track, so a heading
+        ordered for one voyage never steers the next."""
+        if self.order == TRACK:
+            return
+        voyage = self.selection.voyage
+        if voyage is not None and voyage.voyage_id == self._order_voyage:
+            return
+        was, given_for = self.order, self._order_voyage
+        self._take_order(TRACK, voyage.voyage_id if voyage is not None else None)
+        self._decide(
+            now_ns,
+            "KIND_GUIDANCE_ORDER",
+            config_mod.module_source_id(self.conf, CONTROL),
+            f"order {was.describe()} lapsed: voyage {given_for} is no longer the one selected",
+        )
 
     # -- conduct -------------------------------------------------------------------------------
 
@@ -263,6 +352,7 @@ class Processor:
                 helm=helm,
                 arrived=arrived,
                 avoiding=accepted is not None,
+                order=self.order.kind.value,
             )
         )
         if step.changed:
@@ -326,6 +416,7 @@ class Processor:
                     restricted_visibility=self._restricted(snapshot, now_ns),
                     voyage_id=self.selection.voyage.voyage_id if self.selection.voyage else None,
                     route_ref=ref,
+                    order=self.order,
                 )
             ]
         return out
@@ -473,4 +564,17 @@ class Processor:
             authority_level_in_force=self.authority.level,
             conn_held=self.conn_held,
             degraded_inputs=tuple(degraded),
+            guidance_order=(
+                self.order.to_payload() if sel.voyage is not None and plan is not None else None
+            ),
         )
+
+
+def _response(procedure: str, outcome: Outcome, state: dict) -> dict:
+    """The response message, as protobuf JSON, for one decided call."""
+    if procedure == "get_navigation_state":
+        return state
+    response: dict = {"result": outcome.result, "detail": outcome.detail, "state": state}
+    if procedure == "load_route" and outcome.accepted and outcome.voyage_id is not None:
+        response["voyage_id"] = outcome.voyage_id
+    return response

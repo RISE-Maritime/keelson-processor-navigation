@@ -124,6 +124,32 @@ What the state machine guarantees:
 - **A stalled tick loop goes silent.** Axes are repeated only until `command_hold_s` after the
   last tick.
 
+## What navigation_control/v1 does
+
+With `modules.control: true` the processor serves keelson's `navigation_control/v1`
+(keelson#282, pinned as alpha `0.6.0a282.dev1`) under responder id `{source_base}`:
+`{realm}/@v0/{entity_id}/@rpc/navigation_control/v1/{procedure}/navigation/0`. It is then the only
+writer of its vessel's `voyage` records. Each call is queued and decided in the tick
+(`src/nav/control/`), so it is deterministic and runs the same under Slipway's tick fence.
+
+| Procedure | Does |
+|---|---|
+| `load_route` | Makes a route edition the ACTIVE voyage (minted, or the `voyage_id` given). A route from another vessel (`source_entity_id`) is read from router storage and republished unchanged under this vessel, edition and `latest`, first. Any other ACTIVE voyage is ABORTED as superseded. A missing edition is refused, never replaced by `latest` |
+| `set_guidance_order` | `track` (optionally rejoining at a waypoint id), `course_over_ground_deg`, `heading_deg` or `hold`, with an optional `speed_knots`. Course and heading keep their frames: a course is corrected for drift, a heading is not. Without guidance, only `track` is accepted |
+| `set_voyage_status` | Pause, resume, complete or abort. Every change returns the order to `track` |
+| `get_navigation_state` | The `keelson.NavigationState` it would broadcast now. Needs no authority |
+
+Who may call: the holder of the live `command_authority` lease, by presenting its `token`; or,
+while this processor holds the conn itself, a controller listed in `control.controllers` (a
+scenario runner). Everyone else is `DENIED`. Holding no route, the processor hands a granted conn
+straight back, so a caller loads the route while it holds the conn and grants it after.
+
+The order in force is reported as `navigation_state.guidance_order`, and the UNDERWAY sub-mode
+follows it: `SUB_MODE_STEERING` for a course or heading, `SUB_MODE_HOLDING` for hold. An order is
+given for a voyage: once that voyage is no longer the one selected, guidance returns to the track.
+Every call that changes something is in the decision log (`KIND_VOYAGE_CHANGED`,
+`KIND_GUIDANCE_ORDER`), with the voyage's own `audit_trail` naming the caller.
+
 ## Deployment
 
 A vessel has one control mapping and the last writer wins, so with `guidance` enabled this processor
@@ -155,8 +181,8 @@ PYTHONPATH=$NAV/src:$NAV .venv/bin/python -m pytest -p no:cacheprovider \
 docker compose up --build
 ```
 
-The build takes keelson from `../keelson/sdks/python` as a named build context. Run
-`./generate_python.sh` in that checkout first.
+keelson is the exact version pinned in `pyproject.toml`, installed from PyPI; nothing is built from a
+keelson checkout.
 
 ## Development
 

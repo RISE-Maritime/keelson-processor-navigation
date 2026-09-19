@@ -158,6 +158,26 @@ class TrackGuide:
         intercept = max(-self.cfg.max_intercept_deg, min(self.cfg.max_intercept_deg, intercept))
         return (state.leg_bearing_deg - intercept) % 360.0
 
+    def rejoin(self, plan: RoutePlan | None, waypoint_id: str | None) -> None:
+        """Return to the track after an off-track order. At ``waypoint_id``: steer for it, on the
+        leg that arrives there (the first leg for the first waypoint). Without one: forget the leg,
+        so the next ``follow`` acquires the nearest, not the one she left the track on."""
+        self.reset()
+        if plan is None or waypoint_id is None:
+            return
+        i = plan.index_of(waypoint_id)
+        if i is None:
+            return
+        self._route = (plan.route_id, plan.edition)
+        self._to_id = plan.waypoints[max(i, 1)].id
+
+    def helm_heading(self, heading_deg: float, own: Own) -> HelmOrder:
+        """The order for a heading, with no drift correction: an ordered heading is where she
+        points, and what she makes good is whatever the water leaves her."""
+        return self._order(
+            own.cog_deg if own.cog_deg is not None else heading_deg, heading_deg, own
+        )
+
     def helm(self, course_deg: float, own: Own) -> HelmOrder:
         """Heading that makes good ``course_deg`` given her present drift, and the order for it."""
         drift = 0.0
@@ -169,7 +189,9 @@ class TrackGuide:
             d = wrap180(own.heading_deg - own.cog_deg)
             if abs(d) <= self.cfg.max_drift_deg:
                 drift = d
-        heading = (course_deg + drift) % 360.0
+        return self._order(course_deg, (course_deg + drift) % 360.0, own)
+
+    def _order(self, course_deg: float, heading: float, own: Own) -> HelmOrder:
         error = wrap180(heading - own.heading_deg)
         pct = self.cfg.heading_kp_pct_per_deg * error - self.cfg.yaw_kd_pct_per_degps * (
             own.yaw_rate_degps or 0.0

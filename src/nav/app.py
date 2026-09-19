@@ -134,6 +134,13 @@ def run(session, conf: dict, stop) -> None:
         stack.callback(inputs.close)
         inputs.start()
 
+        if processor.controller is not None:
+            from .bus.control import ControlServer
+
+            control = ControlServer(session, conf, processor.world)
+            stack.callback(control.close)
+            control.start()
+
         helm = None
         if processor.guidance is not None:
             from .bus.vehicle_control import HelmBackend

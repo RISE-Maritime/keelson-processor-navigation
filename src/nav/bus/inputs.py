@@ -144,12 +144,16 @@ class Inputs:
         tail = pubsub_tail(str(sample.key_expr))
         if tail is None or tail[0] != "voyage" or len(tail[1]) != 1:
             return
-        voyage = translate.voyage_plan(self._decode(sample, "voyage"))
+        from google.protobuf import json_format
+
+        message = self._decode(sample, "voyage")
+        voyage = translate.voyage_plan(message)
         if voyage.voyage_id != tail[1][0]:
             raise translate.TranslateError(
                 f"voyage_id {voyage.voyage_id!r} does not match its key token {tail[1][0]!r}"
             )
-        self.world.put_voyage(voyage)
+        doc = json_format.MessageToDict(message, preserving_proto_field_name=True)
+        self.world.put_voyage(voyage, doc)
 
     def _on_route(self, sample, live: bool) -> None:
         tail = pubsub_tail(str(sample.key_expr))

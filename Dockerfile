@@ -5,14 +5,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# keelson from the monorepo SDK, passed as the named build context `keelson_sdk`
-# (docker-compose.yml wires it to ../keelson/sdks/python). The PyPI wheel lacks payloads.Route_pb2,
-# which later phases need. The SDK's generated *_pb2 files are gitignored upstream, so run
-# `./generate_python.sh` in the keelson checkout before building.
-COPY --from=keelson_sdk . /opt/keelson-sdk
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system /opt/keelson-sdk
-
+# keelson is pinned exactly in pyproject.toml and installed from PyPI with the other dependencies.
 COPY pyproject.toml README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r pyproject.toml

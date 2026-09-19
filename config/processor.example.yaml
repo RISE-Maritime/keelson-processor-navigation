@@ -26,6 +26,7 @@ modules:
   guidance: false
   conduct: true
   decision_log: false
+  control: false        # serve navigation_control/v1: load routes, guidance orders, voyage status
 
 # The source_id each input is read from, under entity_id. No wildcard default: a vessel can publish
 # one subject from several sources. Simulator ground truth ("truth") is refused.
@@ -136,6 +137,13 @@ guidance:
   yaw_kd_pct_per_degps: 2          # kd * the hull's full-helm turn rate / 100 must stay below 1
   max_drift_deg: 30
   min_sog_for_drift_knots: 1
+
+control:
+  # Who may direct this processor while it holds the conn itself, without presenting a lease token.
+  # The conn holder always may. Empty: only the conn holder.
+  controllers: []
+  reply_timeout_s: 3
+  fetch_timeout_s: 3                # load_route from another vessel: reading its stored edition
 
 decision_log:
   snapshot_s: 30                   # restate recent decisions this often

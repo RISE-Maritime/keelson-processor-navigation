@@ -2,13 +2,13 @@
 
 ## Setup
 
-Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). keelson must come from the monorepo
-SDK, with its protobuf code generated.
+Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). keelson is an exact published version
+pinned in `pyproject.toml` (an alpha from a keelson PR while that PR is open), never a local
+checkout: a pin names one keelson generation, and a checkout names whatever branch it is on.
 
 ```bash
-(cd ../keelson/sdks/python && ./generate_python.sh)
 uv venv --python 3.13
-uv pip install -e ../keelson/sdks/python -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 ## Checks

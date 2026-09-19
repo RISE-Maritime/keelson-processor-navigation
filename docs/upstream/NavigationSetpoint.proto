@@ -28,6 +28,8 @@ message NavigationSetpoint {
     PURPOSE_TRACK = 1;             // following the planned track
     PURPOSE_AVOIDING = 2;          // executing accepted collision-avoidance advice
     PURPOSE_FAILSAFE_NEUTRAL = 3;  // neutral burst before going silent
+    PURPOSE_STEERING = 4;          // holding an ordered course or heading, off the track
+    PURPOSE_HOLDING = 5;           // an ordered hold: neutral helm, no way made
   }
 
   enum Backend {

@@ -18,6 +18,7 @@ modules:
   guidance: true
   conduct: true
   decision_log: true
+  control: true
 
 inputs:
   location_fix: gnss

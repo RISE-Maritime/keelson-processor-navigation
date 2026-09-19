@@ -33,6 +33,9 @@ class Gates:
     helm: str  # free | ours | other | unknown
     arrived: bool
     avoiding: bool
+    order: str = (
+        "track"  # control.orders.Kind value: track | course_over_ground_deg | heading_deg | hold
+    )
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,17 @@ class Step:
     reason: str
     changed: bool
     before: Mode
+
+
+def _sub_mode(g: Gates) -> SubMode:
+    """Accepted advice outranks the order; the order says the rest (keelson.GuidanceOrder)."""
+    if g.avoiding:
+        return SubMode.AVOIDING
+    if g.order == "hold":
+        return SubMode.HOLDING
+    if g.order in ("course_over_ground_deg", "heading_deg"):
+        return SubMode.STEERING
+    return SubMode.TRACK
 
 
 class Conduct:
@@ -64,7 +78,7 @@ class Conduct:
 
     def _next(self, g: Gates) -> tuple[Mode, SubMode, str]:
         none = SubMode.UNSPECIFIED
-        sub = SubMode.AVOIDING if g.avoiding else SubMode.TRACK
+        sub = _sub_mode(g)
         m = self.mode
         if m in (Mode.IDLE, Mode.READY):
             if g.route is None:

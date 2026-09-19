@@ -49,6 +49,30 @@ Deployed **monitor-only** as a keelson-platforms platform service for `slipway-u
 1 Hz on the local router. Guidance switches on there once a scenario can grant the conn, which
 needs `navigation_control/v1` (crowsnest-dev NAVIGATION-DECISION-SERVICES §5.1).
 
+## navigation_control/v1 (keelson#282)
+
+Served with `modules.control` (`src/nav/control/`, `src/nav/bus/control.py`): `load_route`
+(including the cross-vessel copy), `set_guidance_order` (track, course, heading, hold, speed),
+`set_voyage_status`, `get_navigation_state`. This processor is its vessel's only voyage writer
+while it runs. Tested in-process (`tests/test_control.py`) and over an isolated zenoh session
+(`tests/test_e2e_control.py`). keelson is pinned to the #282 alpha `0.6.0a282.dev1` from PyPI; the
+monorepo build context is gone.
+
+- [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
+  review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its
+  `route_id`; does `Caller` move to a common file.
+- [ ] Slipway calls it at tick 0 (a scenario `vessels[].navigation` block). The order matters: with
+  no route this processor hands a granted conn straight back, so Slipway takes the conn, calls
+  `load_route` with its token, then grants the conn here, and lists itself in
+  `control.controllers` for later orders.
+- [ ] Crowsnest calls it: voyage buttons, "Load on vessel…", and the Track/Course/Heading/Hold
+  control. Blocked there on keelson#275 and #282 sharing one alpha.
+- [ ] No live run of a heading order on Slipway yet. `test_acceptance_slipway_guidance.py` should
+  gain a mid-run `set_guidance_order(heading)` and a hand-back to track.
+- [ ] `navigation_state` still rides `raw_json` although keelson types it
+  (`test_riders.py` fails on exactly that, before this work too). Retiring the four riders moves
+  encounter and advice keys and the disposition input, so it is its own change.
+
 - [ ] **Live run on the RISE bus**: Slipway `alpha-navigation` with `config/slipway-usv-alpha-guidance.yaml`, and the autopilot container for slipway-usv-alpha stopped. Needs a person: it commands a vessel on the shared router
 - [ ] Slipway capability probes take a single-chunk `source_id` (`scenario.schema.json`: `^[a-z0-9][a-z0-9_-]*$`), so `alpha-navigation` cannot require the processor before the clock moves the way `alpha-autopilot` requires its autopilot. Ask Slipway to accept keelson's multi-chunk source ids
 - [ ] Add `NavigationSetpoint` and `NavigationDecision` to RISE-Maritime/keelson#260 (drafts in `docs/upstream/`, text in `docs/UPSTREAM-ASKS.md`). Needs a person: it pushes to GitHub
