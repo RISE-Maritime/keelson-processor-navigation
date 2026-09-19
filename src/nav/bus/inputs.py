@@ -78,7 +78,11 @@ class Inputs:
             if source:
                 self._subscribe(self._key("operational_authority", source), self._on_authority)
         if self.need_dispositions:
-            wire = "raw_json" if self.conf["codec"] == "rider" else "advice_disposition"
+            # From the register, not the codec mode: keelson types advice_disposition now, so it is
+            # typed in rider mode too, and a station's disposition arrives on its own subject.
+            from .codec import Codec
+
+            wire = Codec(self.conf["codec"]).wire_subject("advice_disposition")
             key = self._key(wire, "**")
             self._subscribe(key, self._disposition_handler(wire), label=key)
         if self.need_targets:

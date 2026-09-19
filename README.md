@@ -71,11 +71,17 @@ z_sub -e tcp/localhost:7447 -k 'rise/@v0/slipway-usv-alpha/pubsub/raw_json/navig
 
 ## What the COLREG advisor publishes
 
-| Subject (rider on `raw_json/navigation/0/colreg` until keelson types it) | Content |
+| Subject (typed, keelson 0.6.0-pre.18; keys per `protocols/navigation_decisions.yaml`) | Content |
 |---|---|
 | `encounter` | Target, range, bearing, CPA, TCPA, situation, own role, rules, risk grade, opened and closed times. Restated each second while open |
 | `navigation_advice` | One advice for the vessel: course and/or speed, the encounters it answers, validity window, expected CPA, rules, rationale |
 | `advice_disposition` | Accepted or rejected (from an operator or a conduct service), superseded or expired (from the advisor) |
+
+Keys, under `{realm}/@v0/{entity_id}/pubsub/`: `encounter/navigation/0/colreg/{voyage_id or novoyage}/{encounter_id}`
+and `navigation_advice/navigation/0/colreg/{voyage_id or novoyage}/{advice_id}` are instance keys;
+`advice_disposition/{voyage_id or novoyage}/{advice_id}` is a slot written by the advisor and the
+decision holder alike, and it is where an operator's accept or reject arrives. `navigation_state` is
+`navigation_state/navigation/0/conduct`.
 | `alarm` | Collision risk at DANGER, no manoeuvre clears, own velocity unknown with encounters open |
 
 How it decides:

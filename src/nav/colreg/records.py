@@ -129,8 +129,9 @@ class DispositionRecord:
     advice_id: str
     voyage_id: str | None
     state: str
+    # Who, and where: keelson reserves the draft's `decided_site` (field 6) and folds the site
+    # into this free text ("ted@ROC-1"), so a record carrying it would not encode as a proto.
     decided_by: str
-    decided_site: str = ""
     superseded_by: str | None = None
     reason: str = ""
 
@@ -140,7 +141,6 @@ class DispositionRecord:
             "advice_id": self.advice_id,
             "state": self.state,
             "decided_by": self.decided_by,
-            "decided_site": self.decided_site,
             "reason": self.reason,
         }
         _put(out, "voyage_id", self.voyage_id)
@@ -155,7 +155,6 @@ class DispositionRecord:
             voyage_id=payload.get("voyage_id"),
             state=payload.get("state", "STATE_UNSPECIFIED"),
             decided_by=payload.get("decided_by", ""),
-            decided_site=payload.get("decided_site", ""),
             superseded_by=payload.get("superseded_by"),
             reason=payload.get("reason", ""),
         )

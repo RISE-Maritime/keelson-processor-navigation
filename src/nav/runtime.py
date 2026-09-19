@@ -44,6 +44,11 @@ from .world.latch import fresh
 from .world.model import World
 
 CONTROL = "control"
+# keelson's navigation_decisions protocol: `encounter` and `navigation_advice` are INSTANCE keys,
+# {producer}/{voyage_id or novoyage}/{id}, so two advisors on one vessel never share a key.
+# `advice_disposition` is a SLOT, {voyage_id or novoyage}/{advice_id}, with no producer chunk:
+# the advisor and the decision holder write one position, and `decided_by` says which.
+_INSTANCE_KEYED = frozenset({"encounter", "navigation_advice"})
 GUIDANCE_INPUTS = (
     "location_fix",
     "heading_true_north_deg",
@@ -198,7 +203,7 @@ class Processor:
                     self.advisor.record_disposition(record)
             if self.traffic.evaluated_at_ns == now_ns:
                 outputs += [
-                    Output("colreg", e.subject, e.payload, e.source_id)
+                    Output("colreg", e.subject, e.payload, self._colreg_key_tail(e))
                     for e in self.advisor.step(
                         now_ns,
                         self._own_state(snapshot, now_ns),
@@ -440,7 +445,6 @@ class Processor:
             advice.voyage_id,
             "STATE_ACCEPTED",
             decided_by=decided_by,
-            decided_site=self.conf["conduct"]["controller_site"],
             reason=f"accepted by conduct at {level}; worst encounter risk {risk}",
         )
         self.advisor.record_disposition(record)
@@ -456,6 +460,13 @@ class Processor:
         token = self.selection.execution_key_token or "novoyage"
         key_tail = f"{token}/{advice.advice_id}"
         return [Output("conduct", "advice_disposition", record.to_payload(), key_tail)]
+
+    def _colreg_key_tail(self, e) -> str | None:
+        """The advisor names `{voyage}/{id}`; the producer chunk is added here, where the module's
+        own source id is known. A rider ignores the tail, so this changes proto mode only."""
+        if e.subject in _INSTANCE_KEYED and e.source_id is not None:
+            return f"{config_mod.module_source_id(self.conf, 'colreg')}/{e.source_id}"
+        return e.source_id
 
     def _decide(self, now_ns: int, kind: str, decided_by: str, summary: str, **fields) -> None:
         if self.decisions is None:

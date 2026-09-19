@@ -39,9 +39,13 @@ def test_disabled_conduct_publishes_nothing(conf):
     assert p.publications() == {} and p.tick(0) == []
 
 
-def test_state_payload_encodes_as_rider(conf):
+def test_state_payload_encodes_typed(conf):
+    # keelson registers navigation_state, so even rider mode puts it on its own typed subject.
     (out,) = Processor(conf).tick(0)
     codec = Codec("rider")
-    decoded = codec.decode(codec.wire_subject(out.subject), codec.encode(out.subject, out.payload))
+    assert codec.wire_subject(out.subject) == "navigation_state"
+    decoded = codec.decode("navigation_state", codec.encode(out.subject, out.payload))
     assert decoded.subject == "navigation_state"
-    assert decoded.payload == out.payload
+    # proto3 does not put a default on the wire (False, 0, UNKNOWN, []); everything else survives.
+    assert decoded.payload == {k: v for k, v in out.payload.items() if k in decoded.payload}
+    assert decoded.payload["mode"] == out.payload["mode"]

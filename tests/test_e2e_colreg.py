@@ -1,8 +1,9 @@
 """COLREG wiring on an isolated local zenoh peer session.
 
-A target on a collision course goes in on a real @target key; an encounter rider comes out on the
-colreg module's own raw_json key; an operator's advice_disposition rider on the bus reaches the
-advisor. No router, no multicast.
+A target on a collision course goes in on a real @target key; a typed encounter comes out on
+keelson's instance key {producer}/{voyage}/{id} (protocols/navigation_decisions.yaml), and an
+operator's typed advice_disposition on the slot {voyage}/{advice_id} reaches the advisor. No
+router, no multicast.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ def enc(type_name, **fields):
     return keelson.enclose(msg.SerializeToString())
 
 
-def test_encounter_rider_and_inbound_disposition(session, traffic_conf, monkeypatch):  # noqa: F811
+def test_typed_encounter_and_inbound_disposition(session, traffic_conf, monkeypatch):  # noqa: F811
     conf = traffic_conf
     conf["modules"]["route_monitor"] = False
     conf["modules"]["colreg"] = True
@@ -49,14 +50,19 @@ def test_encounter_rider_and_inbound_disposition(session, traffic_conf, monkeypa
 
     monkeypatch.setattr(runtime.Processor, "__init__", spy)
 
-    riders = []
-    rider_key = own("raw_json", "navigation/0/colreg")
-    wrong_keys = []
-    sub = session.declare_subscriber(
-        rider_key, lambda s: riders.append(bytes(s.payload.to_bytes()))
+    # (subject, key, bytes) for every typed record the colreg module publishes.
+    typed = []
+
+    def capture(subject):
+        return lambda s: typed.append((subject, str(s.key_expr), bytes(s.payload.to_bytes())))
+
+    sub = session.declare_subscriber(own("encounter", "**"), capture("encounter"))
+    sub_advice = session.declare_subscriber(
+        own("navigation_advice", "**"), capture("navigation_advice")
     )
+    riders = []
     stray = session.declare_subscriber(
-        own("raw_json", "*/**"), lambda s: wrong_keys.append(str(s.key_expr))
+        own("raw_json", "**"), lambda s: riders.append(str(s.key_expr))
     )
     stop = threading.Event()
     worker = threading.Thread(target=app_mod.run, args=(session, conf, stop), daemon=True)
@@ -93,8 +99,7 @@ def test_encounter_rider_and_inbound_disposition(session, traffic_conf, monkeypa
             session.put(ais("course_over_ground_deg"), enc("keelson.TimestampedFloat", value=270.0))
             session.put(ais("speed_over_ground_knots"), enc("keelson.TimestampedFloat", value=10.0))
 
-            records = [codec.decode("raw_json", r) for r in riders]
-            advice = [d for d in records if d.subject == "navigation_advice"]
+            advice = [codec.decode(s, b) for s, _, b in list(typed) if s == "navigation_advice"]
             if advice and not disposition_sent:
                 advice_id = advice[0].payload["advice_id"]
                 operator = {
@@ -102,11 +107,12 @@ def test_encounter_rider_and_inbound_disposition(session, traffic_conf, monkeypa
                     "advice_id": advice_id,
                     "state": "STATE_ACCEPTED",
                     "decided_by": "ted@ROC-1",
-                    "decided_site": "ROC-1",
                     "reason": "e2e",
                 }
+                # A slot: {voyage or novoyage}/{advice_id}, no producer chunk.
                 session.put(
-                    own("raw_json", "crowsnest/roc-1"), codec.encode("advice_disposition", operator)
+                    own("advice_disposition", f"novoyage/{advice_id}"),
+                    codec.encode("advice_disposition", operator),
                 )
                 disposition_sent = True
             proc = built.get("proc")
@@ -117,24 +123,27 @@ def test_encounter_rider_and_inbound_disposition(session, traffic_conf, monkeypa
         stop.set()
         worker.join(timeout=10)
         sub.undeclare()
+        sub_advice.undeclare()
         stray.undeclare()
 
     assert not worker.is_alive()
-    records = [codec.decode("raw_json", r) for r in riders]
-    encounters = [d.payload for d in records if d.subject == "encounter"]
-    assert encounters and encounters[0]["own_role"] == "ROLE_GIVE_WAY"
-    assert encounters[0]["target"] == {
+    encounters = [(k, codec.decode(s, b).payload) for s, k, b in typed if s == "encounter"]
+    assert encounters
+    key, first = encounters[0]
+    assert first["own_role"] == "ROLE_GIVE_WAY"
+    # The instance key keelson's protocol requires: the producer chunk, then voyage, then id.
+    assert key == own("encounter", f"navigation/0/colreg/novoyage/{first['encounter_id']}")
+    assert first["target"] == {
         "entity_id": "nav-test-ais",
         "source_id": "ais",
         "target_id": "mmsi_265000009",
     }
-    # Ids travel in the payload; nothing of ours landed on an id-shaped raw_json key.
-    ours = own("raw_json", "navigation/0/")
-    assert not [
-        k
-        for k in wrong_keys
-        if k.startswith(ours) and k[len(ours) :].count("/") > 0  # an id below a module source
-    ]
+    advised = [k for s, k, _ in typed if s == "navigation_advice"]
+    assert advised and all(
+        k.startswith(own("navigation_advice", "navigation/0/colreg/novoyage/")) for k in advised
+    )
+    # keelson types all three now: none of them rides raw_json any more.
+    assert not [k for k in riders if k.startswith(own("raw_json", "navigation/0/colreg"))]
     assert disposition_sent, "no advice was published to accept"
     got = built["proc"].advisor.dispositions[advice_id]
     assert (got.state, got.decided_by) == ("STATE_ACCEPTED", "ted@ROC-1")

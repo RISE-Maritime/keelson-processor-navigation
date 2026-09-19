@@ -35,8 +35,9 @@ def session():
 def test_publishes_idle_state_and_declares_liveliness(session, conf):
     conf["state_hz"] = 5.0
     received = []
+    # Typed since keelson registered navigation_state (0.6.0-pre.18); no longer a raw_json rider.
     key = keelson.construct_pubsub_key(
-        conf["realm"], conf["entity_id"], "raw_json", "navigation/0/conduct"
+        conf["realm"], conf["entity_id"], "navigation_state", "navigation/0/conduct"
     )
     sub = session.declare_subscriber(key, lambda s: received.append(bytes(s.payload.to_bytes())))
 
@@ -58,7 +59,7 @@ def test_publishes_idle_state_and_declares_liveliness(session, conf):
 
     assert not worker.is_alive()
     assert len(received) >= 2
-    decoded = Codec("rider").decode("raw_json", received[0])
+    decoded = Codec("rider").decode("navigation_state", received[0])
     assert decoded.subject == "navigation_state"
     assert decoded.payload["mode"] == "MODE_IDLE"
     assert tokens == [source_token]
