@@ -55,20 +55,19 @@ Served with `modules.control` (`src/nav/control/`, `src/nav/bus/control.py`): `l
 (including the cross-vessel copy), `set_guidance_order` (track, course, heading, hold, speed),
 `set_voyage_status`, `get_navigation_state`. This processor is its vessel's only voyage writer
 while it runs. Tested in-process (`tests/test_control.py`) and over an isolated zenoh session
-(`tests/test_e2e_control.py`). keelson is pinned to the #282 alpha `0.6.0a282.dev1` from PyPI; the
-monorepo build context is gone.
+(`tests/test_e2e_control.py`). keelson is pinned to `0.6.0a282.dev2` from PyPI (#282 stacked on #275, the
+alpha Crowsnest and Slipway pin too); the monorepo build context is gone. The Slipway acceptance test
+follows the real flow (operator loads, then grants) and orders a heading mid-run: held to 0.0 deg,
+then back on track within 5 m after `track{}`.
 
 - [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
   review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its
   `route_id`; does `Caller` move to a common file.
-- [ ] Slipway calls it at tick 0 (a scenario `vessels[].navigation` block). The order matters: with
-  no route this processor hands a granted conn straight back, so Slipway takes the conn, calls
-  `load_route` with its token, then grants the conn here, and lists itself in
-  `control.controllers` for later orders.
+- [ ] Slipway calls it at tick 0 (a scenario `vessels[].navigation` block, Slipway ADR-0093):
+  `load_route` as the permitted controller `slipway` while the conn is free, then this processor
+  takes the free conn (`take_conn_when_free`). `config/slipway-usv-alpha-guidance.yaml` lists it.
 - [ ] Crowsnest calls it: voyage buttons, "Load on vessel…", and the Track/Course/Heading/Hold
-  control. Blocked there on keelson#275 and #282 sharing one alpha.
-- [ ] No live run of a heading order on Slipway yet. `test_acceptance_slipway_guidance.py` should
-  gain a mid-run `set_guidance_order(heading)` and a hand-back to track.
+  control, pinned to the same `0.6.0-alpha.282.dev.2`.
 - [ ] `navigation_state` still rides `raw_json` although keelson types it
   (`test_riders.py` fails on exactly that, before this work too). Retiring the four riders moves
   encounter and advice keys and the disposition input, so it is its own change.

@@ -20,6 +20,11 @@ modules:
   decision_log: true
   control: true
 
+control:
+  # Slipway loads her route at tick 0 while nobody holds the conn (ADR-0093 in Slipway); this
+  # processor then takes the free conn and sails it. An operator taking the conn still outranks it.
+  controllers: [slipway]
+
 inputs:
   location_fix: gnss
   heading_true_north_deg: sim

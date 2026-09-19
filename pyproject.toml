@@ -11,10 +11,10 @@ license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [{ name = "RISE Maritime" }]
 dependencies = [
-    # An exact published keelson, never a local checkout. This is the alpha of keelson#282, which
-    # adds navigation_control/v1 and NavigationState.guidance_order; repin to the -pre.N once it
-    # merges. The wheel ships payloads.Route_pb2 (it did not when this repo built from the monorepo).
-    "keelson==0.6.0a282.dev1",
+    # An exact published keelson, never a local checkout. This is the alpha of keelson#282 stacked
+    # on #275 (navigation_control/v1 + XTD corridor Leg fields), the one alpha Crowsnest and Slipway
+    # also pin; repin to the -pre.N carrying both once they merge.
+    "keelson==0.6.0a282.dev2",
     "eclipse-zenoh>=1.2.1",
     "protobuf>=5.29.1",
     "pyyaml>=6.0",

@@ -139,10 +139,13 @@ writer of its vessel's `voyage` records. Each call is queued and decided in the 
 | `set_voyage_status` | Pause, resume, complete or abort. Every change returns the order to `track` |
 | `get_navigation_state` | The `keelson.NavigationState` it would broadcast now. Needs no authority |
 
-Who may call: the holder of the live `command_authority` lease, by presenting its `token`; or,
-while this processor holds the conn itself, a controller listed in `control.controllers` (a
-scenario runner). Everyone else is `DENIED`. Holding no route, the processor hands a granted conn
-straight back, so a caller loads the route while it holds the conn and grants it after.
+Who may call: the holder of the live `command_authority` lease, by presenting its `token`; or a
+controller listed in `control.controllers` (a scenario runner), while this processor holds the conn
+itself **or nobody does**. Once anyone else holds the conn only that holder may, so an operator
+taking the conn outranks the list. Everyone else is `DENIED`. Holding no route, the processor hands
+a granted conn straight back, so an operator loads the route while it holds the conn and grants it
+after; a permitted scenario runner loads it while the conn is free, and `take_conn_when_free` does
+the rest.
 
 The order in force is reported as `navigation_state.guidance_order`, and the UNDERWAY sub-mode
 follows it: `SUB_MODE_STEERING` for a course or heading, `SUB_MODE_HOLDING` for hold. An order is

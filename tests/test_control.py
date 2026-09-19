@@ -182,6 +182,27 @@ def test_a_permitted_controller_may_direct_it_while_it_holds_the_conn(control_co
     assert q.response["result"] == "COMMAND_RESULT_DENIED"
 
 
+def test_a_permitted_controller_may_load_a_route_while_nobody_holds_the_conn(control_conf):
+    """Slipway's tick-0 handover: nobody holds the conn, the scenario loads the route, and a
+    processor with take_conn_when_free takes the free conn and sails it. Slipway never grants."""
+    control_conf["control"]["controllers"] = ["slipway"]
+    control_conf["conduct"]["take_conn_when_free"] = True
+    rig = Rig(control_conf)
+    p = rig.call("load_route", load(caller=caller("slipway"), initial_order={"heading_deg": 45.0}))
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_STEERING"
+
+
+def test_an_operator_holding_the_conn_outranks_the_permitted_list(control_conf):
+    control_conf["control"]["controllers"] = ["slipway"]
+    rig = Rig(control_conf)
+    rig.lease("roc@ROC-1", "T")
+    p = rig.call("load_route", load(caller=caller("slipway")))
+    assert p.response["result"] == "COMMAND_RESULT_DENIED"
+
+
 # -- load_route --------------------------------------------------------------------------------
 
 

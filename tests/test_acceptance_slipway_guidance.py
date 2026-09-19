@@ -1,8 +1,12 @@
-"""Phase 4 acceptance: guidance sails Slipway's slipway-alpha in COMMANDED mode, in-process.
+"""Acceptance: guidance sails Slipway's slipway-usv-alpha in COMMANDED mode, in-process.
 
 Slipway's kernel runs two-vessel-harbor with alpha handed to vehicle_control; the processor gets
 her operational-plane values each tick and its axes are posted to the kernel's command mailbox,
 where the kernel's own dead-man judges them. Nothing touches a zenoh session.
+
+The conn and the route arrive the way they do on the bus (navigation_control/v1): an operator
+holds the conn, loads her route with its lease token, then grants the conn to this processor.
+Calls are queued as ``Pending`` on the World, exactly as bus/control.py queues them.
 
 Run with Slipway's environment, from the Slipway checkout:
 
@@ -31,6 +35,7 @@ from slipway_kernel.scenario import load_scenario  # noqa: E402
 
 from nav import config as config_mod  # noqa: E402
 from nav.conduct.state import Mode  # noqa: E402
+from nav.control.commands import Pending  # noqa: E402
 from nav.guidance.axes import wanted_mapping  # noqa: E402
 from nav.runtime import Processor  # noqa: E402
 from nav.world.latch import Sample  # noqa: E402
@@ -38,7 +43,8 @@ from nav.world.route import RoutePlan, WaypointPlan  # noqa: E402
 
 SLIPWAY = Path(__file__).resolve().parents[2] / "SLIPWAY"
 SCENARIO = SLIPWAY / "scenarios" / "two-vessel-harbor.yaml"
-ALPHA = "slipway-alpha"
+ALPHA = "slipway-usv-alpha"
+OPERATOR = {"controller_id": "roc@ROC-1", "authority_token": "roc-lease"}
 EPOCH = 1_700_000_000 * 10**9
 S = 10**9
 FLOATS = (
@@ -52,11 +58,9 @@ FLOATS = (
 def nav_conf() -> dict:
     c = copy.deepcopy(config_mod.DEFAULTS)
     c["entity_id"] = ALPHA
-    c["modules"].update(route_monitor=True, guidance=True, decision_log=True)
+    c["modules"].update(route_monitor=True, guidance=True, decision_log=True, control=True)
     c["inputs"] = {"location_fix": "gnss", **{s: "sim" for s in FLOATS}}
-    c["conduct"].update(
-        take_conn_when_free=True, fixed_authority_level="AUTHORITY_LEVEL_REMOTE_CONTROLLED"
-    )
+    c["conduct"].update(fixed_authority_level="AUTHORITY_LEVEL_REMOTE_CONTROLLED")
     c["guidance"].update(full_ahead_sog_knots=20.5)
     config_mod._validate(c)
     return c
@@ -76,8 +80,46 @@ class Harbour:
         self.ours = wanted_mapping(config_mod.module_source_id(conf, "guidance"), 1.0)
         self.mapping: dict = {}
         self.plan = self._route()
+        self.p.world.put_edition(self.plan)
         self.history: list[tuple] = []
         self.posted = 0
+        self.grant = "grant-1"
+        self._hand_over(conf)
+
+    def _hand_over(self, conf: dict) -> None:
+        """The operator holds the conn, loads her route, then grants the conn to the processor.
+        Loading first matters: holding no route, the processor hands a granted conn back."""
+        w = self.p.world
+        w.put_lease(
+            {"controller_id": "roc@ROC-1", "token": "roc-lease", "lease_ttl_seconds": 30}, EPOCH
+        )
+        loaded = self.call(
+            "load_route",
+            {"caller": OPERATOR, "route_ref": {"route_id": ALPHA, "route_edition_number": 1}},
+        )
+        assert loaded["result"] == "COMMAND_RESULT_ACCEPTED", loaded["detail"]
+        w.put_lease(
+            {
+                "controller_id": config_mod.controller_id(conf),
+                "controller_site": "ROC-1",
+                "token": self.grant,
+                "lease_ttl_seconds": 30,
+            },
+            self.history[-1][0],
+        )
+
+    def call(self, procedure: str, request: dict) -> dict:
+        """A navigation_control/v1 call, decided on the next tick."""
+        pending = Pending(procedure, request, 0)
+        self.p.world.put_command(pending)
+        self.step()
+        assert pending.done.is_set() and pending.error is None, pending.error
+        return pending.response
+
+    def order(self, order: dict) -> dict:
+        """A guidance order from the operator, who knows the token it granted."""
+        caller = {"controller_id": "roc@ROC-1", "authority_token": self.grant}
+        return self.call("set_guidance_order", {"caller": caller, "order": order})
 
     def _route(self) -> RoutePlan:
         """Alpha's circuit as Slipway declares it, starting where she starts."""
@@ -102,7 +144,6 @@ class Harbour:
             )
             for subject in FLOATS:
                 w.inputs.put(subject, Sample(values[subject], now))
-            w.put_declared("sim", self.plan, now, live=True)
             w.put_helm(self.mapping, now)
             self.p.tick(now)
         act = self.p.actuation
@@ -116,7 +157,7 @@ class Harbour:
             self.posted += 1
         progress = self.p.monitor.status.progress
         self.history.append(
-            (now, self.p.conduct.mode, vessel, values["speed_over_ground_knots"], progress)
+            (now, self.p.conduct.mode, vessel, values["speed_over_ground_knots"], progress, values)
         )
 
     def run(self, seconds: float, **kw) -> None:
@@ -191,3 +232,37 @@ def test_a_processor_that_stops_ticking_goes_silent_and_the_kernel_dead_man_stop
     )
     assert (stopped - died) / S <= limit
     assert after[-1][3] == 0.0
+
+
+def _heading_error(a: float, b: float) -> float:
+    return abs((a - b + 180.0) % 360.0 - 180.0)
+
+
+def test_a_heading_order_mid_run_is_held_and_track_hands_her_back_onto_the_route():
+    h = Harbour()
+    h.run_until(Mode.UNDERWAY, 2.0)
+    h.run(60.0)
+    limit = h.p.conf["route_monitor"]["xtd_limit_fallback_m"]
+    before = h.history[-1][5]["heading_true_north_deg"]
+    ordered = round((before + 90.0) % 360.0, 1)
+
+    r = h.order({"heading_deg": ordered, "speed_knots": 8.0})
+    assert r["result"] == "COMMAND_RESULT_ACCEPTED", r["detail"]
+    assert r["state"]["guidance_order"] == {"heading_deg": ordered, "speed_knots": 8.0}
+    h.run(30.0)
+    assert h.p.conduct.mode is Mode.UNDERWAY
+    assert h.p.conduct.sub_mode.value == "SUB_MODE_STEERING"
+    last = [row[5]["heading_true_north_deg"] for row in h.history[-50:]]  # the last 5 s
+    worst = max(_heading_error(hd, ordered) for hd in last)
+    print(f"ordered {ordered:05.1f}, worst heading error over the last 5 s {worst:.1f} deg")
+    assert worst < 5.0
+    off = abs(h.history[-1][4].xtd_m)
+    assert off > limit, f"only {off:.0f} m off track after 30 s at 90 degrees to it"
+
+    back = h.order({"track": {}})
+    assert back["result"] == "COMMAND_RESULT_ACCEPTED", back["detail"]
+    h.run(120.0)
+    assert h.p.conduct.sub_mode.value == "SUB_MODE_TRACK"
+    rejoined = [abs(row[4].xtd_m) for row in h.history[-200:] if row[4] is not None]
+    print(f"worst |xtd| over the last 20 s after the hand-back: {max(rejoined):.1f} m")
+    assert max(rejoined) < limit

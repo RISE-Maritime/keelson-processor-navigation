@@ -112,10 +112,15 @@ class Controller:
         token = caller.get("authority_token")
         if token and ctx.holder_token is not None and token == ctx.holder_token:
             return None
-        if ctx.conn_held and controller in self.permitted:
+        # A permitted controller (a scenario runner) may direct this process while it holds the
+        # conn, or while nobody does: then it overrides nobody. Once anyone else holds the conn,
+        # only that holder may, so an operator taking the conn always outranks the list.
+        if controller in self.permitted and (ctx.conn_held or ctx.holder_token is None):
             return None
         if ctx.holder_token is None:
-            return "nobody holds the conn, so nobody may direct navigation"
+            return (
+                f"nobody holds the conn, and {controller} is not a controller this process permits"
+            )
         if ctx.conn_held:
             return f"{controller} holds no conn and is not a controller this process permits"
         return f"{controller} does not hold the conn"
