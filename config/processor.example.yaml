@@ -5,7 +5,7 @@ realm: rise
 
 # REQUIRED. The vessel this processor navigates. Every subject is read and published under it.
 # No default on purpose: a wrong entity id navigates the wrong ship.
-entity_id: slipway-alpha
+entity_id: slipway-usv-alpha
 
 # Each module publishes under "{source_base}/{module}", so each decision has its own source.
 source_base: navigation/0
@@ -30,7 +30,7 @@ modules:
 # The source_id each input is read from, under entity_id. No wildcard default: a vessel can publish
 # one subject from several sources. Simulator ground truth ("truth") is refused.
 # Unlisted envelope subjects are reported as unmeasured.
-# These values match Slipway's slipway-alpha: position from slipway-gnss, the rest from the kernel.
+# These values match Slipway's slipway-usv-alpha: position from slipway-gnss, the rest from the kernel.
 inputs:
   location_fix: gnss
   heading_true_north_deg: sim

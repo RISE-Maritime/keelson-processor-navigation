@@ -15,7 +15,7 @@ CONFIGS = sorted((Path(__file__).resolve().parent.parent / "config").glob("*.yam
 @pytest.mark.parametrize("path", CONFIGS, ids=lambda p: p.name)
 def test_every_shipped_config_loads(path):
     conf = config_mod.load(SimpleNamespace(config=str(path)))
-    assert conf["entity_id"] == "slipway-alpha"
+    assert conf["entity_id"] == "slipway-usv-alpha"
 
 
 def test_guidance_is_off_unless_a_config_says_it_is_for_the_simulator():

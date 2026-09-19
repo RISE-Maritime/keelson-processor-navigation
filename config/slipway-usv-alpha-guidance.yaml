@@ -1,13 +1,13 @@
-# Software in the loop ONLY: guidance sails Slipway's slipway-alpha on scenario alpha-navigation.
+# Software in the loop ONLY: guidance sails Slipway's slipway-usv-alpha on scenario alpha-navigation.
 #
-#   navigation --config config/slipway-alpha-guidance.yaml --connect tcp/localhost:7447
+#   navigation --config config/slipway-usv-alpha-guidance.yaml --connect tcp/localhost:7447
 #
 # It commands a vessel. Run it only against a Slipway kernel you started, with the
-# keelson-processor-autopilot container for slipway-alpha stopped. The authority level is fixed
+# keelson-processor-autopilot container for slipway-usv-alpha stopped. The authority level is fixed
 # here because Slipway runs no operational_authority aggregator; every navigation_state says so.
 
 realm: rise
-entity_id: slipway-alpha
+entity_id: slipway-usv-alpha
 source_base: navigation/0
 codec: rider
 

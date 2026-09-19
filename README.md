@@ -66,7 +66,7 @@ dead-reckoned from receipt to now; set `traffic.dead_reckon: false` to match Cro
 Watch it:
 
 ```bash
-z_sub -e tcp/localhost:7447 -k 'rise/@v0/slipway-alpha/pubsub/raw_json/navigation/**'
+z_sub -e tcp/localhost:7447 -k 'rise/@v0/slipway-usv-alpha/pubsub/raw_json/navigation/**'
 ```
 
 ## What the COLREG advisor publishes
@@ -131,8 +131,8 @@ must not share a vessel with `keelson-processor-autopilot`, which re-installs it
 the helm is free. Stop the autopilot container on any vessel this processor steers. Monitoring,
 traffic, advice and conduct without guidance are safe beside it: they command nothing.
 
-[config/slipway-alpha-guidance.yaml](config/slipway-alpha-guidance.yaml) sails Slipway's
-`slipway-alpha` on scenario `alpha-navigation`. It fixes the authority level because Slipway runs no
+[config/slipway-usv-alpha-guidance.yaml](config/slipway-usv-alpha-guidance.yaml) sails Slipway's
+`slipway-usv-alpha` on scenario `alpha-navigation`. It fixes the authority level because Slipway runs no
 authority aggregator, which is acceptable in simulation only.
 
 ## Acceptance against Slipway

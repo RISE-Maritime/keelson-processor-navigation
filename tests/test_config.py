@@ -46,7 +46,7 @@ def test_cli_overrides_defaults():
 
 def test_example_file_loads():
     conf = config_mod.load(ns(config=str(ROOT / "config" / "processor.example.yaml")))
-    assert conf["entity_id"] == "slipway-alpha"
+    assert conf["entity_id"] == "slipway-usv-alpha"
     assert conf["modules"]["conduct"] is True
 
 

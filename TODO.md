@@ -43,7 +43,13 @@ Built (`aee6787`). Guidance replaces `keelson-processor-autopilot` on any vessel
 
 Slipway scenario `alpha-navigation` is on Slipway's local `main` (`23e97f5`), not pushed.
 
-- [ ] **Live run on the RISE bus**: Slipway `alpha-navigation` with `config/slipway-alpha-guidance.yaml`, and the autopilot container for slipway-alpha stopped. Needs a person: it commands a vessel on the shared router
+Deployed **monitor-only** as a keelson-platforms platform service for `slipway-usv-alpha`
+(`platforms/slipway-usv-alpha/docker-compose.navigation.yml`, keelson-platforms `fea6f41`,
+2026-09-19): guidance off, beside the autopilot. It publishes `route_execution/declared-sim` at
+1 Hz on the local router. Guidance switches on there once a scenario can grant the conn, which
+needs `navigation_control/v1` (crowsnest-dev NAVIGATION-DECISION-SERVICES §5.1).
+
+- [ ] **Live run on the RISE bus**: Slipway `alpha-navigation` with `config/slipway-usv-alpha-guidance.yaml`, and the autopilot container for slipway-usv-alpha stopped. Needs a person: it commands a vessel on the shared router
 - [ ] Slipway capability probes take a single-chunk `source_id` (`scenario.schema.json`: `^[a-z0-9][a-z0-9_-]*$`), so `alpha-navigation` cannot require the processor before the clock moves the way `alpha-autopilot` requires its autopilot. Ask Slipway to accept keelson's multi-chunk source ids
 - [ ] Add `NavigationSetpoint` and `NavigationDecision` to RISE-Maritime/keelson#260 (drafts in `docs/upstream/`, text in `docs/UPSTREAM-ASKS.md`). Needs a person: it pushes to GitHub
 - [ ] Speed policy: no UKC slow-down (no depth input is read yet) and no ETA hold
