@@ -100,6 +100,25 @@ class RoutePlan:
         own = self.waypoints[i].leg or LegLimits()
         return own.merged_over(self.default_leg)
 
+    def reversed(self) -> RoutePlan:
+        """The same edition sailed backwards (keelson#324 Track.reverse): waypoints in reverse
+        order, each leg's limits and planned speed moved to the waypoint it now leaves, with port
+        and starboard swapped because she sails it the other way. Same route id and edition -- not
+        a new route."""
+        from dataclasses import replace
+
+        wps = self.waypoints
+        n = len(wps)
+        out = []
+        for j, w in enumerate(reversed(wps)):
+            if j < n - 1:
+                leg = self.leg(n - 2 - j)
+                leg = replace(leg, xtd_port_m=leg.xtd_starboard_m, xtd_starboard_m=leg.xtd_port_m)
+                out.append(replace(w, leg=leg, planned_sog_knots=self.planned_sog_knots(n - 2 - j)))
+            else:
+                out.append(replace(w, leg=None))
+        return replace(self, waypoints=tuple(out))
+
 
 @dataclass(frozen=True)
 class RouteRef:

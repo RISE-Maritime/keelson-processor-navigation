@@ -150,11 +150,12 @@ class TrackGuide:
         radius = radius if radius is not None and radius > 0 else self.cfg.default_turn_radius_m
         return min(radius * math.tan(math.radians(min(delta, 170.0)) / 2.0), 0.5 * leg_in)
 
-    def course(self, state: TrackState, own: Own) -> float:
-        """Line-of-sight course back onto the leg."""
+    def course(self, state: TrackState, own: Own, offset_m: float = 0.0) -> float:
+        """Line-of-sight course back onto the leg -- or onto a line parallel to it, ``offset_m``
+        off its centreline (+ starboard; keelson#324 Track.cross_track_offset)."""
         sog_mps = (own.sog_knots or 0.0) * KNOT_MPS
         lookahead = max(self.cfg.min_lookahead_m, sog_mps * self.cfg.lookahead_s)
-        intercept = math.degrees(math.atan2(state.xte_m, lookahead))
+        intercept = math.degrees(math.atan2(state.xte_m - offset_m, lookahead))
         intercept = max(-self.cfg.max_intercept_deg, min(self.cfg.max_intercept_deg, intercept))
         return (state.leg_bearing_deg - intercept) % 360.0
 

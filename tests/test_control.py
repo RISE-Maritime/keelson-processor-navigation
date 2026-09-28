@@ -714,3 +714,58 @@ def test_every_procedure_is_decoded_and_encoded_on_the_bus():
         assert hasattr(nc, bus._REQUESTS[p]), p
         if p != "get_navigation_state":
             assert hasattr(nc, bus._RESPONSES[p]), p
+
+
+# -- track offset, reverse, speed plan factor (keelson#324) --------------------------------------
+
+
+def test_reverse_sails_the_route_back_and_the_monitor_follows(control_conf):
+    rig = _underway(control_conf)
+    forward_to = rig.p.guidance.state.to_waypoint_id
+    p = rig.call(
+        "set_guidance_order",
+        {"caller": caller(token="grant-1"), "order": {"track": {"reverse": True}}},
+    )
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    rev = rig.p.guidance.state
+    assert rev.to_waypoint_id != forward_to
+    # On the first leg reversed, she makes for WP0 -- the route's first mark.
+    assert rev.to_waypoint_id == rig.plan.waypoints[0].id
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_TRACK"
+    state = rig.published("navigation_state")[-1].payload
+    assert state["guidance_order"] == {"track": {"reverse": True}}
+    assert state["route_ref"]["route_edition_number"] == rig.plan.edition  # the same edition
+    rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": {"track": {}}})
+    rig.run(1.0)
+    assert rig.p.guidance.state.to_waypoint_id == forward_to
+
+
+def test_a_speed_plan_factor_trims_the_planned_speed(control_conf):
+    rig = _underway(control_conf)
+    rig.run(1.0)
+    planned = rig.published("navigation_setpoint")[-1].payload["propulsion"]["sog_mps"]
+    rig.call(
+        "set_guidance_order",
+        {"caller": caller(token="grant-1"), "order": {"track": {}, "speed_plan_factor": 1.2}},
+    )
+    rig.run(1.0)
+    trimmed = rig.published("navigation_setpoint")[-1].payload
+    assert trimmed["propulsion"]["sog_mps"] == pytest.approx(planned * 1.2)
+    assert "+20 %" in trimmed["reason"]
+
+
+def test_an_offset_steers_for_the_parallel_line(control_conf):
+    rig = _underway(control_conf)
+    rig.run(1.0)
+    on_track = rig.published("navigation_setpoint")[-1].payload["steering"][
+        "course_over_ground_deg"
+    ]
+    rig.call(
+        "set_guidance_order",
+        {"caller": caller(token="grant-1"), "order": {"track": {"cross_track_offset_m": 40.0}}},
+    )
+    rig.run(1.0)
+    offset = rig.published("navigation_setpoint")[-1].payload["steering"]["course_over_ground_deg"]
+    # A starboard offset from the centreline: she comes right of the leg's course.
+    assert 0.0 < ((offset - on_track + 540.0) % 360.0 - 180.0) < 90.0

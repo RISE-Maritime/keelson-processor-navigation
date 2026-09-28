@@ -32,6 +32,9 @@ SUBJECTS = (
     "course_over_ground_setpoint_deg",
 )
 
+# A corridor-share offset stays inside the corridor, never on its edge (keelson#324).
+OFFSET_CAP = 0.9
+
 # An arrived go_to holds with neutral axes, which only drifts. She makes for the position again
 # once she has drifted out past this multiple of the arrival radius, so she does not hunt at its
 # edge.
@@ -88,6 +91,7 @@ class Guidance:
         self._released = False
         self._release_pending = False
         self._goto_radius_m = float(gd["goto_arrival_radius_m"])
+        self._xtd_fallback_m = float(conf["route_monitor"]["xtd_limit_fallback_m"])
         self._loiter_return_knots = float(gd["loiter_return_knots"])
         self.goto_arrived = False
         self.loiter = LoiterPhase.TRANSIT
@@ -100,7 +104,9 @@ class Guidance:
         self.goto_arrived = False
         self.loiter = LoiterPhase.TRANSIT
         if order.kind is Kind.TRACK and (
-            previous.kind is not Kind.TRACK or order.resume_from_waypoint_id is not None
+            previous.kind is not Kind.TRACK
+            or order.resume_from_waypoint_id is not None
+            or order.reverse != previous.reverse  # the other direction: re-acquire on it
         ):
             self.track.rejoin(plan, order.resume_from_waypoint_id)
 
@@ -111,6 +117,21 @@ class Guidance:
     @property
     def loiter_return_default_knots(self) -> float:
         return self._loiter_return_knots
+
+    def track_offset_m(self, order: GuidanceOrder, plan) -> float:
+        """The lateral offset to sail the current leg at, metres (+ starboard). A fraction is
+        resolved against the leg's corridor on that side and kept inside it (keelson#324)."""
+        if order.kind is not Kind.TRACK:
+            return 0.0
+        if order.offset_m:
+            return float(order.offset_m)
+        f = order.offset_fraction
+        if not f or self.state is None or plan is None:
+            return 0.0
+        leg = plan.leg(self.state.leg_index)
+        side = leg.xtd_starboard_m if f > 0 else leg.xtd_port_m
+        half = side if side is not None and side > 0 else self._xtd_fallback_m
+        return max(-OFFSET_CAP, min(OFFSET_CAP, f)) * half
 
     def set_defaults(self, *, default_sog_knots=None, goto_radius_m=None, loiter_return_knots=None):
         """set_settings (keelson#322): the defaults an order that names none falls back to."""
@@ -204,7 +225,8 @@ class Guidance:
             elif order.kind is Kind.HEADING and not avoiding:
                 helm_order, heading_frame = self.track.helm_heading(order.value_deg, own), True
             else:
-                helm_order = self.track.helm(self.track.course(self.state, own), own)
+                offset = self.track_offset_m(order, plan)
+                helm_order = self.track.helm(self.track.course(self.state, own, offset), own)
             if avoiding:
                 sog, why = target_sog(
                     self.speed,
@@ -244,6 +266,9 @@ class Guidance:
                     restricted_visibility,
                     None,
                 )
+                if order.speed_factor is not None and order.kind is Kind.TRACK:
+                    sog = sog * order.speed_factor
+                    why = f"{why}, trimmed {(order.speed_factor - 1) * 100:+g} % (keelson#324)"
             throttle = throttle_pct(self.speed, sog, own.sog_knots)
             self.actuation = Actuation(
                 (helm_order.steering_pct, throttle), now_ns + self._hold_ns, install

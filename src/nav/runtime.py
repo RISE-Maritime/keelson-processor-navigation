@@ -11,7 +11,7 @@ authority, advice acceptance, the state machine), guidance, and the decision log
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import config as config_mod
 from .bus.codec import rfc3339
@@ -186,6 +186,11 @@ class Processor:
             else Selection(None, "no module needs routes")
         )
         self._expire_order(now_ns)
+        # keelson#324 Track.reverse: the same edition sailed backwards. Guidance and the route
+        # monitor both see the reversed plan, so route_execution, XTD and arrival follow the
+        # direction she actually sails; route_ref still names the edition.
+        if self.order.reverse and self.selection.plan is not None:
+            self.selection = replace(self.selection, plan=self.selection.plan.reversed())
         if self.monitor is not None:
             outputs += [
                 Output(ROUTE_MONITOR, e.subject, e.payload, e.source_id)
@@ -338,6 +343,8 @@ class Processor:
             voyage = snap.voyages.get(voyage_id) if voyage_id else None
             if voyage is not None and voyage.route_ref is not None:
                 plan = snap.editions.get((voyage.route_ref.route_id, voyage.route_ref.edition))
+            if plan is not None and order.reverse:
+                plan = plan.reversed()
             self.guidance.take_order(order, previous, plan)
 
     def _expire_order(self, now_ns: int) -> None:

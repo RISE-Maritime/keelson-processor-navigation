@@ -39,6 +39,12 @@ class GuidanceOrder:
     radius_m: float | None = None  # LOITER only: how far she may drift
     return_speed_knots: float | None = None  # LOITER only; None = the configured default
     walk_speed_knots: float | None = None  # DP only; value_deg is DP's heading
+    # keelson#324, TRACK only: sail parallel to the legs (+ starboard), in metres or as a share of
+    # the leg's corridor on that side; sail the route backwards.
+    offset_m: float | None = None
+    offset_fraction: float | None = None
+    reverse: bool = False
+    speed_factor: float | None = None  # the planned speed times this (keelson#324)
 
     @property
     def steers_off_track(self) -> bool:
@@ -55,6 +61,12 @@ class GuidanceOrder:
             track = {}
             if self.resume_from_waypoint_id is not None:
                 track["resume_from_waypoint_id"] = self.resume_from_waypoint_id
+            if self.offset_m is not None:
+                track["cross_track_offset_m"] = self.offset_m
+            if self.offset_fraction is not None:
+                track["cross_track_offset_fraction"] = self.offset_fraction
+            if self.reverse:
+                track["reverse"] = True
             payload: dict = {"track": track}
         elif self.kind is Kind.HOLD:
             payload = {"hold": {}}
@@ -80,6 +92,8 @@ class GuidanceOrder:
             payload = {self.kind.value: self.value_deg}
         if self.speed_knots is not None:
             payload["speed_knots"] = self.speed_knots
+        if self.speed_factor is not None:
+            payload["speed_plan_factor"] = self.speed_factor
         return payload
 
     @classmethod
@@ -99,10 +113,38 @@ class GuidanceOrder:
             speed = float(speed)
             if not math.isfinite(speed) or speed < 0:
                 raise OrderError(f"speed_knots must be a finite, non-negative number, not {speed}")
+        factor = payload.get("speed_plan_factor")
+        if factor is not None:
+            if speed is not None:
+                raise OrderError("an order names speed_knots or speed_plan_factor, not both")
+            factor = float(factor)
+            if not math.isfinite(factor) or factor <= 0:
+                raise OrderError(f"speed_plan_factor must be greater than 0, not {factor}")
         if kind is Kind.TRACK:
             track = payload["track"] or {}
             resume = track.get("resume_from_waypoint_id")
-            return cls(Kind.TRACK, None, resume or None, speed)
+            off_m = track.get("cross_track_offset_m")
+            off_f = track.get("cross_track_offset_fraction")
+            if off_m is not None and off_f is not None:
+                raise OrderError("a track names cross_track_offset_m or _fraction, not both")
+            if off_m is not None:
+                off_m = float(off_m)
+                if not math.isfinite(off_m):
+                    raise OrderError("cross_track_offset_m must be finite")
+            if off_f is not None:
+                off_f = float(off_f)
+                if not math.isfinite(off_f) or not -1.0 <= off_f <= 1.0:
+                    raise OrderError(f"cross_track_offset_fraction must be in -1..1, not {off_f}")
+            return cls(
+                Kind.TRACK,
+                None,
+                resume or None,
+                speed,
+                offset_m=off_m or None,
+                offset_fraction=off_f or None,
+                reverse=bool(track.get("reverse", False)),
+                speed_factor=factor,
+            )
         if kind is Kind.HOLD:
             return cls(Kind.HOLD, None, None, speed)
         if kind is Kind.GOTO:
@@ -158,7 +200,21 @@ class GuidanceOrder:
                 if self.resume_from_waypoint_id
                 else ""
             )
-            return f"track{resume}{speed}"
+            reverse = " reversed" if self.reverse else ""
+            if self.offset_m:
+                side = "STBD" if self.offset_m > 0 else "PORT"
+                offset = f", {side} {abs(self.offset_m):g} m"
+            elif self.offset_fraction:
+                side = "STBD" if self.offset_fraction > 0 else "PORT"
+                offset = f", {side} {abs(self.offset_fraction) * 100:g} % of the corridor"
+            else:
+                offset = ""
+            trim = (
+                f", plan {(self.speed_factor - 1) * 100:+g} %"
+                if self.speed_factor is not None
+                else ""
+            )
+            return f"track{reverse}{resume}{offset}{speed}{trim}"
         if self.kind is Kind.HOLD:
             return "hold"
         if self.kind is Kind.DP:

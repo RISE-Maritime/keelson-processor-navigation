@@ -400,3 +400,23 @@ def test_a_loiter_drifts_by_the_position_and_makes_back_for_it():
     assert _distance_m(h, after[-1][2], centre) <= radius
     assert h.p.conduct.mode is Mode.UNDERWAY
     assert h.call("get_navigation_state", {})["guidance_order"] == order
+
+
+def test_a_starboard_offset_is_held_and_rejoin_returns_to_the_centreline():
+    """keelson#324 Track.cross_track_offset_m on the kernel: she moves over and holds it, then
+    rejoins the centreline."""
+    h = Harbour()
+    h.run_until(Mode.UNDERWAY, 2.0)
+    h.run(60.0)
+    r = h.order({"track": {"cross_track_offset_m": 25.0}})
+    assert r["result"] == "COMMAND_RESULT_ACCEPTED", r["detail"]
+    h.run(90.0)
+    held = [row[4].xtd_m for row in h.history[-200:] if row[4] is not None]
+    print(f"offset 25 m: xtd over the last 20 s {min(held):.1f} .. {max(held):.1f} m")
+    assert all(20.0 <= x <= 30.0 for x in held), (min(held), max(held))
+    back = h.order({"track": {}})
+    assert back["result"] == "COMMAND_RESULT_ACCEPTED", back["detail"]
+    h.run(90.0)
+    rejoined = [abs(row[4].xtd_m) for row in h.history[-200:] if row[4] is not None]
+    print(f"rejoined: worst |xtd| over the last 20 s {max(rejoined):.1f} m")
+    assert max(rejoined) < 5.0

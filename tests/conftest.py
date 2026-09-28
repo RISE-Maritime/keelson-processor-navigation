@@ -33,3 +33,10 @@ def traffic_conf(monitor_conf) -> dict:
     monitor_conf["inputs"]["heading_true_north_deg"] = "sim"
     monitor_conf["traffic"]["feeds"] = [{"entity": "nav-test-ais", "source": "ais"}]
     return monitor_conf
+
+
+@pytest.fixture
+def guidance_conf_like(conf):
+    conf["modules"].update(route_monitor=True, guidance=True)
+    conf["guidance"].update(full_ahead_sog_knots=20.0)
+    return conf
