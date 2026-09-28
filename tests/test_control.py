@@ -699,3 +699,18 @@ def test_a_value_out_of_range_is_an_error_and_changes_nothing(control_conf):
     p = _settings(rig, {"default_speed_knots": 9.0, "go_to_arrival_radius_m": -1.0})
     assert p.response is None and "go_to_arrival_radius_m" in p.error
     assert rig.p.guidance.speed.default_sog_knots == control_conf["guidance"]["default_sog_knots"]
+
+
+def test_every_procedure_is_decoded_and_encoded_on_the_bus():
+    """The bus handler maps each procedure to its request and response types. Missing a mapping
+    answered 'undecodable request' live (get_settings, 2026-09-28) while every Pending-level test
+    passed."""
+    from keelson.interfaces import NavigationControl_pb2 as nc
+
+    from nav.bus import control as bus
+    from nav.control.commands import PROCEDURES
+
+    for p in PROCEDURES:
+        assert hasattr(nc, bus._REQUESTS[p]), p
+        if p != "get_navigation_state":
+            assert hasattr(nc, bus._RESPONSES[p]), p

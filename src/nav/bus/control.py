@@ -29,6 +29,8 @@ _REQUESTS = {
     "set_guidance_order": "SetGuidanceOrderRequest",
     "set_voyage_status": "SetVoyageStatusRequest",
     "get_navigation_state": "GetNavigationStateRequest",
+    "get_settings": "GetSettingsRequest",
+    "set_settings": "SetSettingsRequest",
 }
 _RESPONSES = {
     "load_route": "LoadRouteResponse",
