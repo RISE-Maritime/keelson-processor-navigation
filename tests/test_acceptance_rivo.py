@@ -36,6 +36,10 @@ DANGER_CPA_M = 0.25 * 1852.0
 
 @pytest.fixture(scope="module")
 def run():
+    return _replay()
+
+
+def _replay(colreg_active: bool = True):
     conf = copy.deepcopy(config_mod.DEFAULTS)
     conf["entity_id"] = "nav-test-alpha"
     conf["modules"].update(traffic=True, colreg=True, conduct=False)
@@ -48,6 +52,7 @@ def run():
     conf["traffic"]["feeds"] = [{"entity": "slipway-traffic", "source": "ais"}]
     ids = count(1)
     proc = Processor(conf, World(), id_factory=lambda: f"id{next(ids)}")
+    proc.colreg_active = colreg_active  # set_settings colreg_advisor_active (keelson#322)
 
     outputs = []
     for line in FIXTURE.read_text().splitlines():
@@ -151,3 +156,12 @@ def test_collision_alarm_raised_during_danger_and_cleared(run):
 
 def test_colreg_publishes_only_advisory_subjects(run):
     assert {o.subject for _, o in run if o.module == "colreg"} <= set(SUBJECTS)
+
+
+def test_a_paused_advisor_makes_no_encounter_or_advice():
+    """keelson#322 set_settings colreg_advisor_active=false: the same crossing, no records."""
+    paused = _replay(colreg_active=False)
+    assert colreg(paused, "encounter") == []
+    assert colreg(paused, "navigation_advice") == []
+    # Traffic goes on: the targets are still tracked and published.
+    assert any(o.module == "traffic" for _, o in paused)

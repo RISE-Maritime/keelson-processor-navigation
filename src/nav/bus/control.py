@@ -34,6 +34,8 @@ _RESPONSES = {
     "load_route": "LoadRouteResponse",
     "set_guidance_order": "SetGuidanceOrderResponse",
     "set_voyage_status": "SetVoyageStatusResponse",
+    "get_settings": "GetSettingsResponse",
+    "set_settings": "SetSettingsResponse",
 }
 
 

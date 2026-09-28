@@ -75,7 +75,11 @@ then back on track within 5 m after `track{}`.
   lease stops her. Decide which is right: FALLBACK as the transition and READY as the settled state,
   or a protocol change. Found 2026-09-28 writing the rule.
 - [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #320
-  stacked on #308, #316).
+  stacked on #308, #322 stacked on #320, #316).
+- [ ] keelson `NavigationDecision.Kind` has no settings kind, so a `set_settings` change is logged
+  as `KIND_GUIDANCE_ORDER` with a "settings: …" summary. Propose `KIND_SETTINGS_CHANGED` upstream.
+- [ ] A paused COLREG advisor (`set_settings`) keeps the `advice_disposition` liveliness declared at
+  start; and a navigator started without the advisor cannot turn it on at runtime (`fixed`).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.
 - [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
   review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its

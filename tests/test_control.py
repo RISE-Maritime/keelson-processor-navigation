@@ -629,3 +629,73 @@ def test_get_navigation_state_needs_no_authority_and_is_keelsons_message(control
     p = rig.call("get_navigation_state", {})
     assert p.response["mode"] == "MODE_IDLE"
     _encode("get_navigation_state", p.response)
+
+
+# -- settings (keelson#322) --------------------------------------------------------------------
+
+
+def _settings(rig, settings: dict, token="grant-1"):
+    return rig.call("set_settings", {"caller": caller(token=token), "settings": settings})
+
+
+def test_get_settings_says_what_it_has_and_what_is_fixed(control_conf):
+    rig = Rig(control_conf)
+    got = rig.call("get_settings", {}).response
+    s = got["settings"]
+    assert s["default_speed_knots"] == control_conf["guidance"]["default_sog_knots"]
+    assert s["go_to_arrival_radius_m"] == control_conf["guidance"]["goto_arrival_radius_m"]
+    assert s["loiter_return_speed_knots"] == control_conf["guidance"]["loiter_return_knots"]
+    assert s["route_alarms"] is True
+    assert "traffic_range_m" not in s  # no traffic module here: not a setting it has
+    # The advisor was not started, so it (and auto-accept) cannot change while it runs.
+    assert s["colreg_advisor_active"] is False
+    assert set(got["fixed"]) == {"colreg_advisor_active", "auto_accept_advice"}
+    _encode("get_settings", got)
+
+
+def test_set_settings_needs_the_conn(control_conf):
+    rig = _underway(control_conf)
+    p = _settings(rig, {"default_speed_knots": 9.0}, token="not-the-holder")
+    assert p.response["result"] == "COMMAND_RESULT_DENIED"
+    assert rig.p.guidance.speed.default_sog_knots == control_conf["guidance"]["default_sog_knots"]
+
+
+def test_set_settings_applies_the_named_settings_and_restates_them(control_conf):
+    rig = _underway(control_conf)
+    p = _settings(rig, {"default_speed_knots": 9.0, "go_to_arrival_radius_m": 35.0})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    assert p.response["settings"]["default_speed_knots"] == 9.0
+    assert p.response["settings"]["go_to_arrival_radius_m"] == 35.0
+    assert rig.p.guidance.goto_radius_default_m == 35.0
+    _encode("set_settings", p.response)
+    # The new default speed is what a go_to from a standstill makes way at.
+    rig.sog = 0.0
+    target = g.destination(*rig.pos, 90.0, 500.0)
+    rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": _go_to(*target)})
+    rig.run(1.0)
+    kn = rig.published("navigation_setpoint")[-1].payload["propulsion"]["sog_mps"] / KNOT_MPS
+    assert kn == pytest.approx(9.0)
+    kinds = [d.payload["kind"] for d in rig.published("navigation_decision")]
+    assert "KIND_GUIDANCE_ORDER" in kinds
+
+
+@pytest.mark.parametrize(
+    "settings, result",
+    [
+        ({"colreg_advisor_active": True, "default_speed_knots": 9.0}, "COMMAND_RESULT_UNSUPPORTED"),
+        ({"traffic_range_m": 5000.0}, "COMMAND_RESULT_UNSUPPORTED"),  # no traffic module
+    ],
+)
+def test_a_fixed_or_absent_setting_refuses_the_whole_request(control_conf, settings, result):
+    rig = _underway(control_conf)
+    p = _settings(rig, settings)
+    assert p.response["result"] == result
+    # Whole or not at all: the valid half was not applied either.
+    assert rig.p.guidance.speed.default_sog_knots == control_conf["guidance"]["default_sog_knots"]
+
+
+def test_a_value_out_of_range_is_an_error_and_changes_nothing(control_conf):
+    rig = _underway(control_conf)
+    p = _settings(rig, {"default_speed_knots": 9.0, "go_to_arrival_radius_m": -1.0})
+    assert p.response is None and "go_to_arrival_radius_m" in p.error
+    assert rig.p.guidance.speed.default_sog_knots == control_conf["guidance"]["default_sog_knots"]

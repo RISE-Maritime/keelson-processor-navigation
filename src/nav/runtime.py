@@ -22,6 +22,7 @@ from .conduct.authority import UNKNOWN, InForce, in_force, may_auto_accept, may_
 from .conduct.fsm import Conduct, Gates
 from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig, is_navigation_process
 from .conduct.state import Mode, NavigationState, RouteRef
+from .control import settings as settings_mod
 from .control.commands import Context, Controller, InvalidRequest, Outcome, Pending
 from .control.orders import TRACK
 from .guidance.axes import UNKNOWN as HELM_UNKNOWN
@@ -107,6 +108,7 @@ class Processor:
         self.guidance = Guidance(conf) if self.enabled(GUIDANCE) else None
         self.controller = Controller(conf, id_factory) if self.enabled(CONTROL) else None
         self.order = TRACK  # the guidance order in force (navigation_control/v1)
+        self.colreg_active = True  # set_settings may pause the advisor (keelson#322)
         self._order_voyage: str | None = None  # the voyage it was given for
         self.decisions = DecisionLog(conf, id_factory) if self.enabled(DECISION_LOG) else None
         self.conn_held = False
@@ -203,7 +205,9 @@ class Processor:
                 record = DispositionRecord.from_payload(payload)
                 if record.decided_by != "navigation/colreg":
                     self.advisor.record_disposition(record)
-            if self.traffic.evaluated_at_ns == now_ns:
+            # Paused (set_settings colreg_advisor_active=false): no new encounters or advice.
+            # Dispositions are still recorded above, so accepted advice is steered to its end.
+            if self.colreg_active and self.traffic.evaluated_at_ns == now_ns:
                 outputs += [
                     Output("colreg", e.subject, e.payload, self._colreg_key_tail(e))
                     for e in self.advisor.step(
@@ -228,8 +232,9 @@ class Processor:
                     self._next_state_ns += self._state_period_ns
         if answered:
             state = self._state(now_ns).to_payload()
+            settings_now = self.settings()
             for pending, outcome in answered:
-                pending.answer(_response(pending.procedure, outcome, state))
+                pending.answer(_response(pending.procedure, outcome, state, settings_now))
         if self.decisions is not None:
             outputs += [
                 Output(DECISION_LOG, e.subject, e.payload, e.source_id)
@@ -251,6 +256,7 @@ class Processor:
         out: list[Output] = []
         for pending in pendings:
             snap = self.world.snapshot()  # fresh per call: a sequence sees its own effects
+            settings_now, fixed_now = self.settings()
             holder = self.lease_book.holder(now_ns)
             ctx = Context(
                 now_ns=now_ns,
@@ -262,6 +268,8 @@ class Processor:
                 conn_held=self.lease.held(self.lease_book, now_ns),
                 guidance=self.guidance is not None,
                 order=self.order,
+                settings=settings_now,
+                fixed=tuple(fixed_now),
             )
             try:
                 outcome = self.controller.decide(pending, ctx)
@@ -282,8 +290,45 @@ class Processor:
                     self._decide(now_ns, kind, source, summary)
                 if outcome.order is not None:
                     self._take_order(outcome.order, outcome.voyage_id)
+                if outcome.settings:
+                    self._apply_settings(outcome.settings)
             answered.append((pending, outcome))
         return out
+
+    # -- settings (navigation_control/v1, keelson#322) ------------------------------------------
+
+    def settings(self) -> tuple[dict, list[str]]:
+        """The NavigationSettings in force and which are fixed (control/settings.py)."""
+        g = self.guidance
+        return settings_mod.current(
+            conf=self.conf,
+            advisor_built=self.advisor is not None,
+            guidance_built=g is not None,
+            traffic_built=self.traffic is not None,
+            monitor_built=self.monitor is not None,
+            colreg_active=self.colreg_active,
+            default_speed_knots=g.speed.default_sog_knots if g else None,
+            goto_radius_m=g.goto_radius_default_m if g else None,
+            loiter_return_knots=g.loiter_return_default_knots if g else None,
+        )
+
+    def _apply_settings(self, changes: dict) -> None:
+        """Validated whole by the controller; applied here in one tick."""
+        if "colreg_advisor_active" in changes:
+            self.colreg_active = changes["colreg_advisor_active"]
+        if "auto_accept_advice" in changes:
+            self.conf["conduct"]["auto_accept_advice"] = changes["auto_accept_advice"]
+        g = self.guidance
+        if g is not None:
+            g.set_defaults(
+                default_sog_knots=changes.get("default_speed_knots"),
+                goto_radius_m=changes.get("go_to_arrival_radius_m"),
+                loiter_return_knots=changes.get("loiter_return_speed_knots"),
+            )
+        if "traffic_range_m" in changes:
+            self.conf["traffic"]["range_limit_m"] = changes["traffic_range_m"]
+        if "route_alarms" in changes:
+            self.conf["route_monitor"]["alarms"] = changes["route_alarms"]
 
     def _take_order(self, order, voyage_id: str | None) -> None:
         previous, self.order, self._order_voyage = self.order, order, voyage_id
@@ -626,10 +671,16 @@ class Processor:
         )
 
 
-def _response(procedure: str, outcome: Outcome, state: dict) -> dict:
+def _response(procedure: str, outcome: Outcome, state: dict, settings=None) -> dict:
     """The response message, as protobuf JSON, for one decided call."""
     if procedure == "get_navigation_state":
         return state
+    if procedure in ("get_settings", "set_settings"):
+        in_force, fixed = settings
+        present = {k: v for k, v in in_force.items() if v is not None}
+        if procedure == "get_settings":
+            return {"settings": present, "fixed": fixed}
+        return {"result": outcome.result, "detail": outcome.detail, "settings": present}
     response: dict = {"result": outcome.result, "detail": outcome.detail, "state": state}
     if procedure == "load_route" and outcome.accepted and outcome.voyage_id is not None:
         response["voyage_id"] = outcome.voyage_id

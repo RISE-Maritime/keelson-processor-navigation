@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from ..bus.codec import rfc3339
 from ..world.route import RoutePlan, RouteRef, VoyagePlan
+from . import settings as settings_mod
 from .orders import TRACK, GuidanceOrder, Kind, OrderError
 
 # keelson#320: DP holds a position AND a heading, which needs lateral authority. Guidance drives
@@ -26,7 +27,14 @@ NO_DP = (
     "steering and throttle only"
 )
 
-PROCEDURES = ("load_route", "set_guidance_order", "set_voyage_status", "get_navigation_state")
+PROCEDURES = (
+    "load_route",
+    "set_guidance_order",
+    "set_voyage_status",
+    "get_navigation_state",
+    "get_settings",  # keelson#322
+    "set_settings",  # keelson#322
+)
 
 ACCEPTED = "COMMAND_RESULT_ACCEPTED"
 TEMPORARILY_REJECTED = "COMMAND_RESULT_TEMPORARILY_REJECTED"
@@ -82,6 +90,8 @@ class Context:
     conn_held: bool  # this process holds that lease
     guidance: bool  # guidance is enabled, so an off-track order can be held
     order: GuidanceOrder
+    settings: dict = field(default_factory=dict)  # NavigationSettings in force (keelson#322)
+    fixed: tuple = ()  # settings it has but cannot change while it runs
 
 
 @dataclass
@@ -94,6 +104,7 @@ class Outcome:
     editions: list[tuple[RoutePlan, dict]] = field(default_factory=list)  # copies to write/publish
     publish_latest: list[tuple[str, dict]] = field(default_factory=list)  # (route_id, route dict)
     decisions: list[tuple[str, str]] = field(default_factory=list)  # (kind, summary)
+    settings: dict | None = None  # set_settings: the changes to apply, validated whole
 
     @property
     def accepted(self) -> bool:
@@ -139,7 +150,7 @@ class Controller:
         """Raises InvalidRequest for a malformed request; otherwise every refusal is an Outcome."""
         if pending.procedure not in PROCEDURES:
             raise InvalidRequest(f"unknown procedure {pending.procedure!r}")
-        if pending.procedure == "get_navigation_state":
+        if pending.procedure in ("get_navigation_state", "get_settings"):
             return Outcome(ACCEPTED)
         req = pending.request
         denied = self.refusal(req, ctx)
@@ -150,7 +161,26 @@ class Controller:
             return self._load_route(pending, ctx, controller)
         if pending.procedure == "set_guidance_order":
             return self._set_order(req, ctx, controller)
+        if pending.procedure == "set_settings":
+            return self._set_settings(req, ctx, controller)
         return self._set_status(req, ctx, controller)
+
+    def _set_settings(self, req: dict, ctx: Context, controller: str) -> Outcome:
+        try:
+            changes, unsupported = settings_mod.parse(
+                req.get("settings") or {}, ctx.settings, list(ctx.fixed)
+            )
+        except (settings_mod.SettingsError, TypeError, ValueError) as exc:
+            raise InvalidRequest(str(exc)) from exc
+        if changes is None:
+            return Outcome(UNSUPPORTED, unsupported)
+        if not changes:
+            return Outcome(ACCEPTED, "no setting named: nothing changed")
+        summary = f"settings: {settings_mod.describe(ctx.settings, changes)} ({controller})"
+        # No NavigationDecision kind for settings yet; logged under guidance order.
+        return Outcome(
+            ACCEPTED, summary, settings=changes, decisions=[("KIND_GUIDANCE_ORDER", summary)]
+        )
 
     def _order(self, payload, ctx: Context) -> GuidanceOrder:
         try:

@@ -7,7 +7,7 @@ record at ``setpoint_hz``.
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from enum import StrEnum
 
 from ..bus.codec import rfc3339
@@ -103,6 +103,23 @@ class Guidance:
             previous.kind is not Kind.TRACK or order.resume_from_waypoint_id is not None
         ):
             self.track.rejoin(plan, order.resume_from_waypoint_id)
+
+    @property
+    def goto_radius_default_m(self) -> float:
+        return self._goto_radius_m
+
+    @property
+    def loiter_return_default_knots(self) -> float:
+        return self._loiter_return_knots
+
+    def set_defaults(self, *, default_sog_knots=None, goto_radius_m=None, loiter_return_knots=None):
+        """set_settings (keelson#322): the defaults an order that names none falls back to."""
+        if default_sog_knots is not None:
+            self.speed = replace(self.speed, default_sog_knots=float(default_sog_knots))
+        if goto_radius_m is not None:
+            self._goto_radius_m = float(goto_radius_m)
+        if loiter_return_knots is not None:
+            self._loiter_return_knots = float(loiter_return_knots)
 
     def release_helm(self) -> None:
         """The conn was handed to an operator: once guidance has gone silent, release the axis
