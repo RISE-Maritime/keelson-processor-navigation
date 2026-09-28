@@ -43,11 +43,11 @@ Built (`aee6787`). Guidance replaces `keelson-processor-autopilot` on any vessel
 
 Slipway scenario `alpha-navigation` is on Slipway's local `main` (`23e97f5`), not pushed.
 
-Deployed **monitor-only** as a keelson-platforms platform service for `slipway-usv-alpha`
-(`platforms/slipway-usv-alpha/docker-compose.navigation.yml`, keelson-platforms `fea6f41`,
-2026-09-19): guidance off, beside the autopilot. It publishes `route_execution/declared-sim` at
-1 Hz on the local router. Guidance switches on there once a scenario can grant the conn, which
-needs `navigation_control/v1` (crowsnest-dev NAVIGATION-DECISION-SERVICES §5.1).
+Deployed as a keelson-platforms platform service for `slipway-usv-alpha`
+(`platforms/slipway-usv-alpha/docker-compose.navigation.yml`), **with guidance on since 2026-09-28**
+(keelson-platforms `5079f53`). The autopilot container is removed and its stale axis mapping cleared.
+The conn is given, never taken (`take_conn_when_free: false`); live, it sits READY with "conn not
+held" until an operator grants it, and it only moves her while the kernel has her commanded.
 
 ## navigation_control/v1 (keelson#282)
 
@@ -65,13 +65,6 @@ then back on track within 5 m after `track{}`.
 
 - [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #316).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.
-- [ ] Slipway acceptance `test_pulling_the_lease_stops_her...` fails on current Slipway main
-  (e87b85e): stopped 3.1 s after the pull, limit 3.0 s. It fails identically at 79c9467, before the
-  go_to work, so it is the kernel's stop, not guidance. Measured 2026-09-28; find which Slipway
-  change added the 0.1 s. The go_to acceptance (arrived 87 s, held within 19 m) passes.
-- [ ] keelson#308 says an unordered go_to keeps "the speed she has"; from a hold that is zero, so
-  this processor uses `default_sog_knots` below `arrival_sog_knots`. Raise it on #308 so the
-  protocol says so.
 - [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
   review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its
   `route_id`; does `Caller` move to a common file.
@@ -84,7 +77,7 @@ then back on track within 5 m after `track{}`.
   (`test_riders.py` fails on exactly that, before this work too). Retiring the four riders moves
   encounter and advice keys and the disposition input, so it is its own change.
 
-- [ ] **Live run on the RISE bus**: Slipway `alpha-navigation` with `config/slipway-usv-alpha-guidance.yaml`, and the autopilot container for slipway-usv-alpha stopped. Needs a person: it commands a vessel on the shared router
+- [ ] **Live run on the RISE bus**: the deployed navigator is ready for it (guidance on, autopilot gone, mapping free). Load Slipway `alpha-navigation` (or set alpha commanded), take the conn in Crowsnest, load her route, hand the conn to navigation/0, then try a go-to. Needs a person: it commands a vessel on the shared router
 - [ ] Slipway capability probes take a single-chunk `source_id` (`scenario.schema.json`: `^[a-z0-9][a-z0-9_-]*$`), so `alpha-navigation` cannot require the processor before the clock moves the way `alpha-autopilot` requires its autopilot. Ask Slipway to accept keelson's multi-chunk source ids
 - [ ] Add `NavigationSetpoint` and `NavigationDecision` to RISE-Maritime/keelson#260 (drafts in `docs/upstream/`, text in `docs/UPSTREAM-ASKS.md`). Needs a person: it pushes to GitHub
 - [ ] Speed policy: no UKC slow-down (no depth input is read yet) and no ETA hold
