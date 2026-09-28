@@ -20,7 +20,7 @@ from .colreg.advisor import Advisor, OwnState, advisor_config
 from .colreg.records import DispositionRecord
 from .conduct.authority import UNKNOWN, InForce, in_force, may_auto_accept, may_drive
 from .conduct.fsm import Conduct, Gates
-from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig
+from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig, is_navigation_process
 from .conduct.state import Mode, NavigationState, RouteRef
 from .control.commands import Context, Controller, InvalidRequest, Outcome, Pending
 from .control.orders import TRACK
@@ -58,6 +58,7 @@ GUIDANCE_INPUTS = (
 _LEASE_KINDS = {
     "taken": "KIND_CONN_TAKEN",
     "granted": "KIND_CONN_GRANTED",
+    "handed": "KIND_CONN_LOST",  # granted on request: "went to another controller"
     "lost": "KIND_CONN_LOST",
     "released": "KIND_CONN_RELEASED",
     "requested": "KIND_CONN_REQUESTED",
@@ -112,6 +113,7 @@ class Processor:
         self._missing: tuple[str, ...] = ()
         self._own_payload: dict | None = None
         self._last_lease_event: str | None = None
+        self._ignored_requesters: set[str] = set()
 
     def enabled(self, module: str) -> bool:
         return bool(self.conf["modules"].get(module))
@@ -313,11 +315,41 @@ class Processor:
 
     # -- conduct -------------------------------------------------------------------------------
 
+    def _request_to_answer(self, now_ns: int) -> dict | None:
+        """The newest command_request to answer with a grant: an operator's, for this vessel,
+        still fresh. Another navigation process's request is never granted -- logged once."""
+        cd = self.conf["conduct"]
+        me = self.lease.cfg.controller_id
+        fresh_ns = int(cd["lease_ttl_s"] * 1e9)
+        chosen = None
+        for payload, received_ns in self.world.take_requests():
+            requester = payload.get("requester_id") or ""
+            if (
+                not requester
+                or requester == me
+                or payload.get("vessel_id") != self.conf["entity_id"]
+                or now_ns - received_ns > fresh_ns
+            ):
+                continue
+            if is_navigation_process(requester):
+                if requester not in self._ignored_requesters:
+                    self._ignored_requesters.add(requester)
+                    self._decide(
+                        now_ns,
+                        "KIND_CONN_REQUESTED",
+                        config_mod.module_source_id(self.conf, "conduct"),
+                        f"request from {requester} ignored: another navigation process",
+                    )
+                continue
+            chosen = payload
+        return chosen if cd["yield_on_request"] else None
+
     def _conduct_step(self, snapshot, now_ns: int) -> list[Output]:
         cd = self.conf["conduct"]
         out: list[Output] = []
         for payload, received_ns in self.world.take_leases():
             self.lease_book.hear(payload, received_ns)
+        yield_to = self._request_to_answer(now_ns)
         for kind, detail in self.world.take_helm_events():
             self._decide(now_ns, kind, config_mod.module_source_id(self.conf, GUIDANCE), detail)
 
@@ -391,7 +423,12 @@ class Processor:
             and helm in ("free", "ours")
         )
         publish, events = self.lease.step(
-            self.lease_book, now_ns, want=want, may_take=may_take, may_request=cd["request_conn"]
+            self.lease_book,
+            now_ns,
+            want=want,
+            may_take=may_take,
+            may_request=cd["request_conn"],
+            yield_to=yield_to,
         )
         for subject, payload in publish:
             if subject == "command_authority":
@@ -406,6 +443,10 @@ class Processor:
                     event.detail,
                 )
             self._last_lease_event = event.kind
+            if event.kind == "handed" and self.guidance is not None:
+                # Free the operator's helm: the axis mapping is released once guidance goes
+                # silent, by the same path as the end of a voyage.
+                self.guidance.release_helm()
         self.conn_held = self.lease.held(self.lease_book, now_ns)
 
         if self.guidance is not None:

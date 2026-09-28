@@ -65,6 +65,10 @@ still water, so its make-back is proven only in the unit tests (`test_control.py
 follows the real flow (operator loads, then grants) and orders a heading mid-run: held to 0.0 deg,
 then back on track within 5 m after `track{}`.
 
+- [ ] Propose into keelson `navigation_conduct.yaml` (#282): the navigation process answers an
+  operator's `command_request` with a directed grant (`conduct.yield_on_request`, 2026-09-28).
+  Without it the protocol lets automation that was handed the conn keep it forever: a live lease
+  cannot be seized, and this one never lapses. Found live on alpha the day guidance went on.
 - [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #320
   stacked on #308, #316).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.

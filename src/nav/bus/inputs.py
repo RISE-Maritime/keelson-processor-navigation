@@ -74,6 +74,9 @@ class Inputs:
             # that publishes one is heard: a lease this receiver ignores cannot lapse for it.
             key = self._key("command_authority", "**")
             self._subscribe(key, self._on_lease, label=key)
+            # An operator's request for the conn, which the holder answers with a grant.
+            key = self._key("command_request", "**")
+            self._subscribe(key, self._on_request, label=key)
             source = self.conf["conduct"]["authority_source"]
             if source:
                 self._subscribe(self._key("operational_authority", source), self._on_authority)
@@ -216,6 +219,13 @@ class Inputs:
         message = self._decode(sample, "command_authority")
         payload = json_format.MessageToDict(message, preserving_proto_field_name=True)
         self.world.put_lease(payload, self.clock())
+
+    def _on_request(self, sample) -> None:
+        from google.protobuf import json_format
+
+        message = self._decode(sample, "command_request")
+        payload = json_format.MessageToDict(message, preserving_proto_field_name=True)
+        self.world.put_request(payload, self.clock())
 
     def _on_authority(self, sample) -> None:
         message = self._decode(sample, "operational_authority")

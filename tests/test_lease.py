@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from nav.conduct.lease import LeaseBook, LeaseClient, LeaseConfig
+from nav.conduct.lease import LeaseBook, LeaseClient, LeaseConfig, is_navigation_process
 
 pytestmark = pytest.mark.unit
 
@@ -113,3 +113,54 @@ def test_its_own_lease_heard_back_is_not_a_grant():
     book.hear(payload, 0)
     _, events = c.step(book, S, want=True, may_take=True, may_request=False)
     assert events == []
+
+
+REQUEST = {
+    "vessel_id": "nav-test-vessel",
+    "requester_id": "ted@ROC-1",
+    "requester_site": "ROC-1",
+    "reason": "command",
+}
+
+
+def test_holding_it_grants_the_conn_to_a_request_with_a_fresh_token():
+    book, c = LeaseBook(), client()
+    book.hear(grant(token="op-1"), 0)
+    c.step(book, S, want=True, may_take=False, may_request=False)  # adopts the grant
+    assert c.held(book, S)
+    out, events = c.step(
+        book, 2 * S, want=True, may_take=False, may_request=False, yield_to=REQUEST
+    )
+    assert [e.kind for e in events] == ["handed"] and "ted@ROC-1" in events[0].detail
+    ((subject, payload),) = out
+    assert subject == "command_authority" and payload["released"] is False
+    # keelson's grant: the requester AND its site, exactly, so the station adopts it.
+    assert (payload["controller_id"], payload["controller_site"]) == ("ted@ROC-1", "ROC-1")
+    assert payload["token"] not in ("op-1", c.token) and payload["token"] in c.self_issued
+    book.hear(payload, 2 * S)
+    assert not c.held(book, 2 * S) and c.token is None
+    # Its own grant is never adopted back, and it does not take the conn again.
+    out, events = c.step(book, 3 * S, want=True, may_take=True, may_request=False)
+    assert out == [] and events == []
+
+
+def test_a_request_is_not_answered_by_a_process_that_does_not_hold_the_conn():
+    book, c = LeaseBook(), client()
+    book.hear(grant(controller="someone@ROC-2", token="x"), 0)
+    out, events = c.step(book, S, want=True, may_take=False, may_request=False, yield_to=REQUEST)
+    assert out == [] and events == []
+
+
+@pytest.mark.parametrize(
+    "controller, automation",
+    [
+        ("navigation/0@sf18", True),
+        ("navigation/guidance@usv", True),
+        ("ted@ROC-1", False),
+        ("roc@ROC-1", False),
+        ("slipway", False),
+        ("", False),
+    ],
+)
+def test_navigation_processes_are_told_from_operators(controller, automation):
+    assert is_navigation_process(controller) is automation

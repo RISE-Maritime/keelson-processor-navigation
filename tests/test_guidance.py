@@ -246,3 +246,65 @@ def test_guidance_publications_are_declared(guidance_conf):
         "course_over_ground_setpoint_deg",
     )
     assert pubs["decision_log"] == ("navigation_decision",)
+
+
+def _request(rig, requester="ted@ROC-1", site="ROC-1", vessel="nav-test-vessel"):
+    rig.p.world.put_request(
+        {"vessel_id": vessel, "requester_id": requester, "requester_site": site}, rig.now
+    )
+
+
+def test_an_operators_request_gets_the_conn_and_frees_the_helm(guidance_conf):
+    rig = Rig(guidance_conf)
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.UNDERWAY and rig.mapping == wanted_mapping(SRC, 1.0)
+    _request(rig)
+    out, asked = [], []
+    for _ in range(40):
+        out += rig.tick()
+        asked.append(rig.p.actuation.mapping)
+    granted = [
+        o.payload
+        for o in subjects(out, "command_authority")
+        if o.payload["controller_id"] == "ted@ROC-1"
+    ]
+    assert granted and granted[0]["controller_site"] == "ROC-1"
+    assert rig.p.conduct.mode is Mode.FALLBACK
+    assert not rig.p.lease.held(rig.p.lease_book, rig.now)
+    # Neutral first, then silence -- and the mapping released once, so the operator's helm is
+    # free (the rig does not act on a release; the vehicle does).
+    assert rig.p.actuation.axes is None
+    assert asked.count("release") == 1
+    decisions = [d.payload for d in subjects(out, "navigation_decision")]
+    assert any(
+        d["kind"] == "KIND_CONN_LOST" and "ted@ROC-1" in d.get("summary", str(d)) for d in decisions
+    )
+    # It does not take the conn back although it is free to (take_conn_when_free).
+    rig.run(3.0)
+    assert rig.p.conduct.mode is Mode.FALLBACK
+
+
+@pytest.mark.parametrize(
+    "requester, vessel",
+    [
+        ("navigation/1@nav-test-vessel", "nav-test-vessel"),  # automation: never granted
+        ("navigation/0@nav-test-vessel", "nav-test-vessel"),  # itself
+        ("ted@ROC-1", "another-vessel"),  # not this vessel's conn
+    ],
+)
+def test_requests_it_does_not_grant(guidance_conf, requester, vessel):
+    rig = Rig(guidance_conf)
+    rig.run(1.0)
+    _request(rig, requester=requester, vessel=vessel)
+    rig.run(2.0)
+    assert rig.p.conduct.mode is Mode.UNDERWAY
+    assert rig.p.lease.held(rig.p.lease_book, rig.now)
+
+
+def test_yield_on_request_can_be_switched_off(guidance_conf):
+    guidance_conf["conduct"]["yield_on_request"] = False
+    rig = Rig(guidance_conf)
+    rig.run(1.0)
+    _request(rig)
+    rig.run(2.0)
+    assert rig.p.conduct.mode is Mode.UNDERWAY

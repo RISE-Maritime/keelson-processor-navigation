@@ -93,6 +93,10 @@ CONDUCT_DEFAULTS = {
     "request_conn": False,
     "request_interval_s": 10.0,
     "take_conn_when_free": False,
+    # Answer an operator's command_request with a directed grant. Without it a station that gave
+    # this process the conn cannot get it back: a live lease cannot be seized, and this one never
+    # lapses. Another navigation process's request is never granted.
+    "yield_on_request": True,
     "authority_source": None,
     "authority_max_age_s": 10.0,
     "fixed_authority_level": None,

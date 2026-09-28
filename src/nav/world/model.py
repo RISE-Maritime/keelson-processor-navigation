@@ -44,6 +44,7 @@ class World:
         self._rejected: dict[str, str] = {}
         self._dispositions: list[dict] = []
         self._leases: list[tuple[dict, int]] = []
+        self._requests: list[tuple[dict, int]] = []
         self._helm: tuple[dict | None, int] | None = None
         self._helm_events: list[tuple[str, str]] = []
         self.inputs = Latch()
@@ -97,6 +98,16 @@ class World:
     def take_leases(self) -> list[tuple[dict, int]]:
         with self._lock:
             out, self._leases = self._leases, []
+        return out
+
+    def put_request(self, payload: dict, received_ns: int) -> None:
+        """A command_request message, as its payload dict, stamped with local receipt time."""
+        with self._lock:
+            self._requests.append((payload, received_ns))
+
+    def take_requests(self) -> list[tuple[dict, int]]:
+        with self._lock:
+            out, self._requests = self._requests, []
         return out
 
     def put_helm(self, mapping: dict | None, received_ns: int) -> None:

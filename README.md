@@ -153,6 +153,13 @@ a granted conn straight back, so an operator loads the route while it holds the 
 after; a permitted scenario runner loads it while the conn is free, and `take_conn_when_free` does
 the rest.
 
+**Getting the conn back.** A live lease cannot be seized, and this process heartbeats its lease
+for as long as it has a route, so it answers `command_request` (`conduct.yield_on_request`, on by
+default): an operator's request is granted with keelson's directed `grant` -- a fresh token naming
+the requester and its site -- and she stops as on a pulled lease (neutral burst, then silence), with
+the axis mapping released so the operator's helm is free. It resumes only on a new grant. A request
+from another navigation process (`navigation/…@…`) is never granted.
+
 The order in force is reported as `navigation_state.guidance_order`, and the UNDERWAY sub-mode
 follows it: `SUB_MODE_STEERING` for a course or heading, `SUB_MODE_HOLDING` for hold. A `go_to`
 steers for the position (`SUB_MODE_STEERING`), at the speed she has or `default_sog_knots` from a

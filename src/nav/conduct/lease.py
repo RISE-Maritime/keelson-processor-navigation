@@ -17,6 +17,7 @@ hear the lease.
 
 from __future__ import annotations
 
+import re
 import secrets
 from dataclasses import dataclass, replace
 
@@ -64,6 +65,15 @@ class LeaseBook:
         return self.last if self.last is not None and self.last.live(now_ns) else None
 
 
+_NAVIGATION_PROCESS = re.compile(r"^navigation/[^@]+@")
+
+
+def is_navigation_process(controller_id: str) -> bool:
+    """A navigation process's controller id, ``{source_base}@{vessel}``: automation, never an
+    operator. The conn is yielded to operators only."""
+    return bool(_NAVIGATION_PROCESS.match(controller_id or ""))
+
+
 @dataclass(frozen=True)
 class LeaseConfig:
     vessel_id: str
@@ -76,7 +86,7 @@ class LeaseConfig:
 
 @dataclass(frozen=True)
 class LeaseEvent:
-    kind: str  # taken | granted | lost | released | requested
+    kind: str  # taken | granted | handed | lost | released | requested
     detail: str
 
 
@@ -102,10 +112,21 @@ class LeaseClient:
         )
 
     def step(
-        self, book: LeaseBook, now_ns: int, *, want: bool, may_take: bool, may_request: bool
+        self,
+        book: LeaseBook,
+        now_ns: int,
+        *,
+        want: bool,
+        may_take: bool,
+        may_request: bool,
+        yield_to: dict | None = None,
     ) -> tuple[list[tuple[str, dict]], list[LeaseEvent]]:
         """(subject, payload) pairs to publish, and what happened. Publish the command_authority
-        payloads back into ``book`` too: a holder hears its own lease."""
+        payloads back into ``book`` too: a holder hears its own lease.
+
+        ``yield_to`` is a command_request to answer: while holding, the conn is granted to its
+        requester -- keelson's ``grant``, a fresh token naming the requester and its site, so the
+        holder changes with no lapse in between."""
         out: list[tuple[str, dict]] = []
         events: list[LeaseEvent] = []
         me = self.cfg.controller_id
@@ -128,6 +149,14 @@ class LeaseClient:
             )
             events.append(LeaseEvent("lost", why))
             self.token = None
+
+        if self.token is not None and yield_to is not None:
+            out.append(("command_authority", self._grant(now_ns, yield_to)))
+            events.append(
+                LeaseEvent("handed", f"conn granted to {yield_to['requester_id']} on request")
+            )
+            self.token = None
+            return out, events
 
         if self.token is not None:
             if not want:
@@ -170,6 +199,24 @@ class LeaseClient:
             "lease_ttl_seconds": int(c.ttl_s),
             "heartbeat_interval_seconds": int(c.heartbeat_s),
             "released": released,
+        }
+
+    def _grant(self, now_ns: int, request: dict) -> dict:
+        c = self.cfg
+        token = self._new_token()
+        self.self_issued.add(token)  # never adopted back as a grant to this process
+        return {
+            "vessel_id": c.vessel_id,
+            "controller_id": request["requester_id"],
+            # Exactly as requested: a station adopts a grant only when id AND site are its own.
+            "controller_site": request.get("requester_site", ""),
+            "token": token,
+            "granted_at": rfc3339(now_ns),
+            "expires_at": rfc3339(now_ns + int(c.ttl_s * 1e9)),
+            "last_heartbeat": rfc3339(now_ns),
+            "lease_ttl_seconds": int(c.ttl_s),
+            "heartbeat_interval_seconds": int(c.heartbeat_s),
+            "released": False,
         }
 
     def _request(self, now_ns: int) -> dict:

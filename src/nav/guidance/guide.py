@@ -86,6 +86,7 @@ class Guidance:
         self._next_setpoint_ns: int | None = None
         self._driving = False
         self._released = False
+        self._release_pending = False
         self._goto_radius_m = float(gd["goto_arrival_radius_m"])
         self._loiter_return_knots = float(gd["loiter_return_knots"])
         self.goto_arrived = False
@@ -102,6 +103,11 @@ class Guidance:
             previous.kind is not Kind.TRACK or order.resume_from_waypoint_id is not None
         ):
             self.track.rejoin(plan, order.resume_from_waypoint_id)
+
+    def release_helm(self) -> None:
+        """The conn was handed to an operator: once guidance has gone silent, release the axis
+        mapping so their helm is free, as at the end of a voyage."""
+        self._release_pending = True
 
     def observe(self, plan, own: Own | None) -> TrackState | None:
         """Where the vessel is along the route, for conduct's arrival gate. Keeps the leg across a
@@ -149,6 +155,7 @@ class Guidance:
         if driving and plan is not None and own is not None and self.state is not None:
             if not self._driving:
                 self._driving, self._released, self._next_setpoint_ns = True, False, None
+                self._release_pending = False
             avoiding = advice is not None
             install = "install" if helm == FREE else None
             arrived = order.kind is Kind.GOTO and self.goto_arrived
@@ -263,7 +270,7 @@ class Guidance:
                 None,
             )
         mapping = None
-        if ended and helm == OURS and not self._released:
+        if (ended or self._release_pending) and helm == OURS and not self._released:
             mapping, self._released = "release", True
         self.actuation = Actuation(None, 0, mapping)
         return []

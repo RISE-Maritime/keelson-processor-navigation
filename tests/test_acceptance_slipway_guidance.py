@@ -221,6 +221,38 @@ def test_pulling_the_lease_stops_her_within_the_neutral_burst_and_dead_man():
     assert h.p.lease.token is None
 
 
+def test_an_operator_who_requests_the_conn_gets_it_and_she_stops():
+    """The way back from "Hand conn to navigator": an operator's command_request is granted, she
+    stops within the neutral burst + dead-man, and the operator holds the conn."""
+    h = Harbour()
+    h.run_until(Mode.UNDERWAY, 2.0)
+    h.run(120.0)
+    assert h.history[-1][3] > 7.0, "not up to speed before the request"
+    asked = h.history[-1][0]
+    h.p.world.put_request(
+        {"vessel_id": ALPHA, "requester_id": "roc@ROC-1", "requester_site": "ROC-1"}, asked
+    )
+    h.run(60.0)
+    after = [r for r in h.history if r[0] > asked]
+    stopped = next(r[0] for r in after if r[3] == 0.0)
+    # The request is heard on the next tick: one kernel step before the grant goes out.
+    heard_s = h.scenario.dt_ns / S
+    limit = (
+        h.p.conf["guidance"]["neutral_burst_s"]
+        + h.cfg.actuators.max_axis_age_s
+        + STOP_MARGIN_S
+        + heard_s
+    )
+    print(f"stopped {(stopped - asked) / S:.1f} s after the request (limit {limit:.1f} s)")
+    assert (stopped - asked) / S <= limit
+    # The last lease heard is the grant to the operator (who, in this harness, never heartbeats
+    # it, so it lapses later; the navigator does not take it back).
+    last = h.p.lease_book.last
+    assert last is not None and last.controller_id == "roc@ROC-1"
+    assert h.p.lease.token is None
+    assert h.mapping == {}, "the operator's helm is still mapped to guidance"
+
+
 def test_a_processor_that_stops_ticking_goes_silent_and_the_kernel_dead_man_stops_her():
     h = Harbour()
     h.run_until(Mode.UNDERWAY, 2.0)
