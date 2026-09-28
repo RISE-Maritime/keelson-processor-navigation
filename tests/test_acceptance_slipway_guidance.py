@@ -266,3 +266,60 @@ def test_a_heading_order_mid_run_is_held_and_track_hands_her_back_onto_the_route
     rejoined = [abs(row[4].xtd_m) for row in h.history[-200:] if row[4] is not None]
     print(f"worst |xtd| over the last 20 s after the hand-back: {max(rejoined):.1f} m")
     assert max(rejoined) < limit
+
+
+def _distance_m(h: Harbour, vessel, target) -> float:
+    from nav.route_monitor import geodesy as g
+
+    lat, lon = h.scenario.plane.wgs84_from_enu(vessel.east_m, vessel.north_m)
+    return g.haversine_m(lat, lon, *target)
+
+
+def test_a_go_to_makes_for_the_position_and_holds_there():
+    """keelson#308 end to end on the kernel: steer for a point off the route, hold on arrival with
+    the order still in force, and stay by it (making back for it past twice the radius)."""
+    from nav.route_monitor import geodesy as g
+
+    h = Harbour()
+    h.run_until(Mode.UNDERWAY, 2.0)
+    h.run(30.0)
+    vessel = h.history[-1][2]
+    here = h.scenario.plane.wgs84_from_enu(vessel.east_m, vessel.north_m)
+    heading = h.history[-1][5]["heading_true_north_deg"]
+    target = g.destination(*here, (heading + 90.0) % 360.0, 300.0)
+    radius = 20.0
+    order = {
+        "go_to": {
+            "position": {"latitude_deg": target[0], "longitude_deg": target[1]},
+            "arrival_radius_m": radius,
+        },
+        "speed_knots": 6.0,
+    }
+    r = h.order(order)
+    assert r["result"] == "COMMAND_RESULT_ACCEPTED", r["detail"]
+    assert r["state"]["guidance_order"]["go_to"]["arrival_radius_m"] == radius
+    h.run(5.0)
+    assert h.p.conduct.sub_mode.value == "SUB_MODE_STEERING"
+
+    ordered_at = h.history[-1][0]
+    for _ in range(int(300 * S / h.scenario.dt_ns)):
+        h.step()
+        if h.p.conduct.sub_mode.value == "SUB_MODE_HOLDING":
+            break
+    else:
+        raise AssertionError(f"never arrived; {_distance_m(h, h.history[-1][2], target):.0f} m off")
+    took = (h.history[-1][0] - ordered_at) / S
+    print(f"arrived after {took:.0f} s")
+    assert _distance_m(h, h.history[-1][2], target) <= radius
+
+    arrived_at = h.history[-1][0]
+    h.run(120.0)
+    after = [row for row in h.history if row[0] > arrived_at]
+    worst = max(_distance_m(h, row[2], target) for row in after)
+    rest = _distance_m(h, after[-1][2], target)
+    print(f"held: worst {worst:.0f} m from the position, {rest:.0f} m at rest, sog {after[-1][3]}")
+    assert worst < 4 * radius, "overran the position and did not come back"
+    assert rest <= 2 * radius
+    assert h.p.conduct.mode is Mode.UNDERWAY
+    state = h.call("get_navigation_state", {})
+    assert state["guidance_order"] == order  # arrival ends the passage, never the order

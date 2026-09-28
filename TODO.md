@@ -65,6 +65,10 @@ then back on track within 5 m after `track{}`.
 
 - [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #316).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.
+- [ ] Slipway acceptance `test_pulling_the_lease_stops_her...` fails on current Slipway main
+  (e87b85e): stopped 3.1 s after the pull, limit 3.0 s. It fails identically at 79c9467, before the
+  go_to work, so it is the kernel's stop, not guidance. Measured 2026-09-28; find which Slipway
+  change added the 0.1 s. The go_to acceptance (arrived 87 s, held within 19 m) passes.
 - [ ] keelson#308 says an unordered go_to keeps "the speed she has"; from a hold that is zero, so
   this processor uses `default_sog_knots` below `arrival_sog_knots`. Raise it on #308 so the
   protocol says so.
