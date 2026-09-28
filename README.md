@@ -133,7 +133,7 @@ What the state machine guarantees:
 ## What navigation_control/v1 does
 
 With `modules.control: true` the processor serves keelson's `navigation_control/v1`
-(keelson#282, pinned as alpha `0.6.0a282.dev1`) under responder id `{source_base}`:
+(keelson#282, pinned through keelson's experimental build `0.6.0.dev11`) under responder id `{source_base}`:
 `{realm}/@v0/{entity_id}/@rpc/navigation_control/v1/{procedure}/navigation/0`. It is then the only
 writer of its vessel's `voyage` records. Each call is queued and decided in the tick
 (`src/nav/control/`), so it is deterministic and runs the same under Slipway's tick fence.
@@ -141,7 +141,7 @@ writer of its vessel's `voyage` records. Each call is queued and decided in the 
 | Procedure | Does |
 |---|---|
 | `load_route` | Makes a route edition the ACTIVE voyage (minted, or the `voyage_id` given). A route from another vessel (`source_entity_id`) is read from router storage and republished unchanged under this vessel, edition and `latest`, first. Any other ACTIVE voyage is ABORTED as superseded. A missing edition is refused, never replaced by `latest` |
-| `set_guidance_order` | `track` (optionally rejoining at a waypoint id), `course_over_ground_deg`, `heading_deg` or `hold`, with an optional `speed_knots`. Course and heading keep their frames: a course is corrected for drift, a heading is not. Without guidance, only `track` is accepted |
+| `set_guidance_order` | `track` (optionally rejoining at a waypoint id), `course_over_ground_deg`, `heading_deg`, `hold` or `go_to` (keelson#308: a position and an optional `arrival_radius_m`, default `guidance.goto_arrival_radius_m`), with an optional `speed_knots`. Course and heading keep their frames: a course is corrected for drift, a heading is not. Without guidance, only `track` is accepted |
 | `set_voyage_status` | Pause, resume, complete or abort. Every change returns the order to `track` |
 | `get_navigation_state` | The `keelson.NavigationState` it would broadcast now. Needs no authority |
 
@@ -154,7 +154,13 @@ after; a permitted scenario runner loads it while the conn is free, and `take_co
 the rest.
 
 The order in force is reported as `navigation_state.guidance_order`, and the UNDERWAY sub-mode
-follows it: `SUB_MODE_STEERING` for a course or heading, `SUB_MODE_HOLDING` for hold. An order is
+follows it: `SUB_MODE_STEERING` for a course or heading, `SUB_MODE_HOLDING` for hold. A `go_to`
+steers for the position (`SUB_MODE_STEERING`), at the speed she has or `default_sog_knots` from a
+standstill; inside the radius it holds with neutral axes (`SUB_MODE_HOLDING`, the order still in
+force), and makes for the position again once she drifts out past twice the radius. While it steers,
+guidance also publishes keelson#316's `heading_setpoint_deg` and, unless the frame is a heading,
+`course_over_ground_setpoint_deg` (TimestampedFloat, `navigation/0/guidance`); neither is published
+while it holds or goes neutral. An order is
 given for a voyage: once that voyage is no longer the one selected, guidance returns to the track.
 Every call that changes something is in the decision log (`KIND_VOYAGE_CHANGED`,
 `KIND_GUIDANCE_ORDER`), with the voyage's own `audit_trail` naming the caller.

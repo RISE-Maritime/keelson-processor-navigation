@@ -26,7 +26,7 @@ class SubMode(StrEnum):
     AVOIDING = "SUB_MODE_AVOIDING"
     HOLDING = "SUB_MODE_HOLDING"
     REROUTING = "SUB_MODE_REROUTING"
-    STEERING = "SUB_MODE_STEERING"  # holding an ordered course or heading, off the track
+    STEERING = "SUB_MODE_STEERING"  # an ordered course, heading or go_to, off the track
 
 
 # keelson.OperationalAuthority.AuthorityLevel names. UNKNOWN is non-authorising.

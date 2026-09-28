@@ -16,6 +16,7 @@ from nav.conduct.state import Mode
 from nav.control.commands import Pending
 from nav.control.orders import GuidanceOrder, Kind, OrderError
 from nav.guidance.axes import wanted_mapping
+from nav.guidance.track import KNOT_MPS
 from nav.route_monitor import geodesy as g
 from nav.runtime import Processor
 from nav.world.latch import Sample
@@ -64,6 +65,7 @@ class Rig:
         self.mapping: dict = {}
         wp0 = self.plan.waypoints[0]
         self.pos = g.destination(wp0.lat, wp0.lon, 0.0, 100.0)
+        self.sog = 8.0
         self.out: list = []
 
     def lease(self, controller: str, token: str) -> None:
@@ -85,7 +87,7 @@ class Rig:
             ("location_fix", self.pos),
             ("heading_true_north_deg", 0.0),
             ("course_over_ground_deg", 0.0),
-            ("speed_over_ground_knots", 8.0),
+            ("speed_over_ground_knots", self.sog),
         ):
             w.inputs.put(subject, Sample(value, self.now))
         out = self.p.tick(self.now)
@@ -125,6 +127,14 @@ def load(route_id="r1", edition=1, **kw) -> dict:
         {"course_over_ground_deg": 90.0},
         {"heading_deg": 359.5, "speed_knots": 4.0},
         {"hold": {}},
+        {"go_to": {"position": {"latitude_deg": 57.7, "longitude_deg": 11.9}}},
+        {
+            "go_to": {
+                "position": {"latitude_deg": -33.9, "longitude_deg": 151.2},
+                "arrival_radius_m": 25.0,
+            },
+            "speed_knots": 5.0,
+        },
     ],
 )
 def test_orders_round_trip_through_keelson_guidance_order(payload):
@@ -145,6 +155,16 @@ def test_orders_round_trip_through_keelson_guidance_order(payload):
         {"heading_deg": 360.0},
         {"course_over_ground_deg": -1.0},
         {"track": {}, "speed_knots": -2.0},
+        {"go_to": {}},
+        {"go_to": {"position": {"latitude_deg": 91.0, "longitude_deg": 0.0}}},
+        {"go_to": {"position": {"latitude_deg": 0.0, "longitude_deg": 181.0}}},
+        {
+            "go_to": {
+                "position": {"latitude_deg": 0.0, "longitude_deg": 0.0},
+                "arrival_radius_m": -1.0,
+            }
+        },
+        {"go_to": {"position": {"latitude_deg": 0.0, "longitude_deg": 0.0}}, "hold": {}},
     ],
 )
 def test_an_order_is_one_frame_with_a_usable_value(payload):
@@ -364,6 +384,88 @@ def test_hold_drives_neutral_and_track_rejoins(control_conf):
     assert rig.p.guidance.state.to_waypoint_id == "wp2"
 
 
+def _go_to(lat, lon, radius=None) -> dict:
+    go_to: dict = {"position": {"latitude_deg": lat, "longitude_deg": lon}}
+    if radius is not None:
+        go_to["arrival_radius_m"] = radius
+    return {"go_to": go_to}
+
+
+def test_a_go_to_steers_for_the_position_then_holds_and_makes_back_for_it(control_conf):
+    rig = _underway(control_conf)
+    target = g.destination(*rig.pos, 90.0, 500.0)
+    order = _go_to(*target, radius=20.0)
+    p = rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": order})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_STEERING"
+    setpoint = rig.published("navigation_setpoint")[-1].payload
+    assert setpoint["purpose"] == "PURPOSE_STEERING"
+    assert abs(setpoint["steering"]["course_over_ground_deg"] - 90.0) < 0.5
+    assert setpoint["actuation"]["steering_pct"] > 0  # heading 000 -> 090: starboard
+    assert setpoint["propulsion"]["sog_mps"] > 0
+    assert abs(rig.published("heading_setpoint_deg")[-1].payload["value"] - 90.0) < 0.5
+    state = rig.published("navigation_state")[-1].payload
+    assert state["guidance_order"] == order
+    assert check_payload(state, parse("NavigationState.proto", "NavigationState")) == []
+
+    for distance, sub_mode in ((10.0, "HOLDING"), (35.0, "HOLDING"), (45.0, "STEERING")):
+        rig.pos = g.destination(*target, 270.0, distance)
+        rig.run(0.5)
+        assert rig.p.conduct.sub_mode.value == f"SUB_MODE_{sub_mode}", distance
+        if sub_mode == "HOLDING":
+            assert rig.p.actuation.axes == (0.0, 0.0)
+            assert rig.published("navigation_setpoint")[-1].payload["purpose"] == (
+                "PURPOSE_HOLDING"
+            )
+    rig.run(1.0)
+    # Arrival ends the passage, never the order: go_to is still the one in force.
+    assert rig.published("navigation_state")[-1].payload["guidance_order"] == order
+    assert rig.p.conduct.mode is Mode.UNDERWAY
+
+
+def test_a_go_to_without_a_radius_arrives_at_the_configured_one(control_conf):
+    control_conf["guidance"]["goto_arrival_radius_m"] = 60.0
+    rig = _underway(control_conf)
+    target = g.destination(*rig.pos, 90.0, 500.0)
+    rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": _go_to(*target)})
+    rig.pos = g.destination(*target, 270.0, 50.0)
+    rig.run(0.5)
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_HOLDING"
+
+
+def test_a_go_to_keeps_her_speed_but_makes_way_from_a_standstill(control_conf):
+    rig = _underway(control_conf)
+    target = g.destination(*rig.pos, 90.0, 500.0)
+    rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": _go_to(*target)})
+    rig.run(1.0)
+    kn = rig.published("navigation_setpoint")[-1].payload["propulsion"]["sog_mps"] / KNOT_MPS
+    assert kn == pytest.approx(8.0)  # the speed she has (keelson#308)
+    rig.sog = 0.0
+    rig.run(1.0)
+    kn = rig.published("navigation_setpoint")[-1].payload["propulsion"]["sog_mps"] / KNOT_MPS
+    assert kn == pytest.approx(control_conf["guidance"]["default_sog_knots"])
+    assert rig.p.actuation.axes[1] > 0
+
+
+def test_setpoint_subjects_name_the_frame_the_helm_steers_by(control_conf):
+    rig = _underway(control_conf)
+    rig.run(1.0)
+    assert rig.published("course_over_ground_setpoint_deg")  # on the track: a course
+    assert rig.published("heading_setpoint_deg")
+    token = {"caller": caller(token="grant-1")}
+    rig.call("set_guidance_order", {**token, "order": {"heading_deg": 45.0}})
+    rig.out.clear()
+    rig.run(1.0)
+    assert rig.published("heading_setpoint_deg")[-1].payload["value"] == 45.0
+    assert not rig.published("course_over_ground_setpoint_deg")  # a heading has no course
+    rig.call("set_guidance_order", {**token, "order": {"hold": {}}})
+    rig.out.clear()
+    rig.run(1.0)
+    assert not rig.published("heading_setpoint_deg")  # absent when nobody holds one
+    assert not rig.published("course_over_ground_setpoint_deg")
+
+
 def test_a_waypoint_not_on_the_route_is_refused(control_conf):
     rig = _underway(control_conf)
     p = rig.call(
@@ -389,6 +491,8 @@ def test_without_guidance_only_track_is_held(monitor_only):
         "set_guidance_order", {"caller": caller(token="T"), "order": {"heading_deg": 90.0}}
     )
     assert p.response["result"] == "COMMAND_RESULT_UNSUPPORTED"
+    r = rig.call("set_guidance_order", {"caller": caller(token="T"), "order": _go_to(57.7, 11.9)})
+    assert r.response["result"] == "COMMAND_RESULT_UNSUPPORTED"
     q = rig.call("set_guidance_order", {"caller": caller(token="T"), "order": {"track": {}}})
     assert q.response["result"] == "COMMAND_RESULT_ACCEPTED"
 

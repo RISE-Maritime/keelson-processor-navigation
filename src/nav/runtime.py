@@ -330,6 +330,9 @@ class Processor:
         plan = self.selection.plan
         own = self._guidance_own(snapshot, now_ns)
         track = self.guidance.observe(plan, own) if self.guidance is not None else None
+        station_held = (
+            self.guidance.station(self.order, own) if self.guidance is not None else False
+        )
         helm = self._helm(now_ns)
 
         if self.advisor is not None and cd["auto_accept_advice"]:
@@ -358,6 +361,7 @@ class Processor:
                 arrived=arrived,
                 avoiding=accepted is not None,
                 order=self.order.kind.value,
+                station_held=station_held,
             )
         )
         if step.changed:

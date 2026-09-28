@@ -70,7 +70,20 @@ def test_guidance_maps_the_helm_drives_and_goes_silent_when_the_lease_is_pulled(
         _, _, payload = keelson.uncover(bytes(sample.payload.to_bytes()))
         axes.append((str(sample.key_expr), float_cls.FromString(payload).value, time.monotonic()))
 
+    setpoints: list[tuple[str, float]] = []
+
+    def on_setpoint(sample):
+        _, _, payload = keelson.uncover(bytes(sample.payload.to_bytes()))
+        subject = str(sample.key_expr).split("/pubsub/")[1].split("/")[0]
+        setpoints.append((subject, float_cls.FromString(payload).value))
+
     subs = [
+        session.declare_subscriber(
+            key("heading_setpoint_deg", "navigation/0/guidance"), on_setpoint
+        ),
+        session.declare_subscriber(
+            key("course_over_ground_setpoint_deg", "navigation/0/guidance"), on_setpoint
+        ),
         session.declare_subscriber(key("joystick_x_pct", "navigation/0/guidance"), on_axis),
         session.declare_subscriber(key("joystick_y_pct", "navigation/0/guidance"), on_axis),
         session.declare_subscriber(
@@ -143,6 +156,11 @@ def test_guidance_maps_the_helm_drives_and_goes_silent_when_the_lease_is_pulled(
     per_subject = {k: sum(1 for a in rate if a[0] == k) for k in {a[0] for a in rate}}
     assert len(per_subject) == 2, per_subject
     assert all(8 <= n <= 13 for n in per_subject.values()), per_subject
+
+    # keelson#316 setpoints, typed on their own subjects: on the track the helm steers a course.
+    named = {s for s, _ in setpoints}
+    assert named == {"heading_setpoint_deg", "course_over_ground_setpoint_deg"}, named
+    assert all(0.0 <= v < 360.0 for _, v in setpoints)
 
     after = [a for a in axes if a[2] > pulled_at + 0.3]
     assert after, "no neutral burst after the lease was pulled"

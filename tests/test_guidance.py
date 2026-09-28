@@ -7,6 +7,7 @@ import pytest
 from nav.bus.codec import Codec
 from nav.conduct.state import Mode
 from nav.guidance.axes import wanted_mapping
+from nav.guidance.guide import go_to_arrived
 from nav.route_monitor import geodesy as g
 from nav.runtime import Processor
 from nav.world.latch import Sample
@@ -201,7 +202,26 @@ def test_arrival_releases_the_conn_and_the_mapping(guidance_conf):
     assert "KIND_CONN_RELEASED" in kinds
 
 
+@pytest.mark.parametrize(
+    "was, distance, now",
+    [
+        (False, 20.0, True),  # in at the radius
+        (False, 20.1, False),
+        (True, 39.9, True),  # an arrived go_to holds until twice the radius
+        (True, 40.1, False),
+    ],
+)
+def test_go_to_arrival_has_hysteresis(was, distance, now):
+    assert go_to_arrived(was, distance, 20.0) is now
+
+
 def test_guidance_publications_are_declared(guidance_conf):
     pubs = Processor(guidance_conf).publications()
-    assert pubs["guidance"] == ("joystick_x_pct", "joystick_y_pct", "navigation_setpoint")
+    assert pubs["guidance"] == (
+        "joystick_x_pct",
+        "joystick_y_pct",
+        "navigation_setpoint",
+        "heading_setpoint_deg",
+        "course_over_ground_setpoint_deg",
+    )
     assert pubs["decision_log"] == ("navigation_decision",)

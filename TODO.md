@@ -55,11 +55,19 @@ Served with `modules.control` (`src/nav/control/`, `src/nav/bus/control.py`): `l
 (including the cross-vessel copy), `set_guidance_order` (track, course, heading, hold, speed),
 `set_voyage_status`, `get_navigation_state`. This processor is its vessel's only voyage writer
 while it runs. Tested in-process (`tests/test_control.py`) and over an isolated zenoh session
-(`tests/test_e2e_control.py`). keelson is pinned to `0.6.0a282.dev2` from PyPI (#282 stacked on #275, the
-alpha Crowsnest and Slipway pin too); the monorepo build context is gone. The Slipway acceptance test
+(`tests/test_e2e_control.py`). keelson is pinned to the experimental build `0.6.0.dev11` from PyPI
+(`0.6.0-experimental.11`: dev + #282, #308, #316 and the rest in flight, the build Crowsnest and
+Slipway pin too); the monorepo build context is gone. `go_to` (keelson#308) and the
+`heading_setpoint_deg` / `course_over_ground_setpoint_deg` subjects (keelson#316) are served since
+2026-09-28. The Slipway acceptance test
 follows the real flow (operator loads, then grants) and orders a heading mid-run: held to 0.0 deg,
 then back on track within 5 m after `track{}`.
 
+- [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #316).
+  Repin to the first `0.6.0-pre.N` carrying all three once they merge.
+- [ ] keelson#308 says an unordered go_to keeps "the speed she has"; from a hold that is zero, so
+  this processor uses `default_sog_knots` below `arrival_sog_knots`. Raise it on #308 so the
+  protocol says so.
 - [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
   review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its
   `route_id`; does `Caller` move to a common file.

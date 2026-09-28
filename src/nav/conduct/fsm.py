@@ -33,9 +33,9 @@ class Gates:
     helm: str  # free | ours | other | unknown
     arrived: bool
     avoiding: bool
-    order: str = (
-        "track"  # control.orders.Kind value: track | course_over_ground_deg | heading_deg | hold
-    )
+    # control.orders.Kind value: track | course_over_ground_deg | heading_deg | hold | go_to
+    order: str = "track"
+    station_held: bool = False  # a go_to order has arrived and holds there
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,9 @@ def _sub_mode(g: Gates) -> SubMode:
         return SubMode.AVOIDING
     if g.order == "hold":
         return SubMode.HOLDING
+    if g.order == "go_to":
+        # keelson#308: steering while she makes for the position, holding once arrived.
+        return SubMode.HOLDING if g.station_held else SubMode.STEERING
     if g.order in ("course_over_ground_deg", "heading_deg"):
         return SubMode.STEERING
     return SubMode.TRACK

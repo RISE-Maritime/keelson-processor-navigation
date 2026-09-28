@@ -12,6 +12,7 @@ from dataclasses import fields
 from ..bus.codec import rfc3339
 from ..control.orders import TRACK, GuidanceOrder, Kind
 from ..outputs import Emit
+from ..route_monitor import geodesy as g
 from .axes import FREE, OURS, Actuation
 from .failsafe import Failsafe
 from .speed import SpeedConfig, target_sog, throttle_pct
@@ -19,7 +20,29 @@ from .track import KNOT_MPS, HelmOrder, Own, TrackConfig, TrackGuide, TrackState
 
 MODULE = "guidance"
 BACKEND = "BACKEND_VEHICLE_CONTROL_AXES"
-SUBJECTS = ("joystick_x_pct", "joystick_y_pct", "navigation_setpoint")
+# navigation_setpoint is this process's full record (a raw_json rider). The two *_setpoint_*
+# subjects (keelson#316) state the same target in the form any display can read. There is no
+# speed_through_water_setpoint_knots: the speed this process orders is over ground.
+SUBJECTS = (
+    "joystick_x_pct",
+    "joystick_y_pct",
+    "navigation_setpoint",
+    "heading_setpoint_deg",
+    "course_over_ground_setpoint_deg",
+)
+
+# An arrived go_to holds with neutral axes, which only drifts. She makes for the position again
+# once she has drifted out past this multiple of the arrival radius, so she does not hunt at its
+# edge.
+REAPPROACH_FACTOR = 2.0
+
+
+def go_to_arrived(was_arrived: bool, distance_m: float, radius_m: float) -> bool:
+    """Arrival at a go_to position, with hysteresis: in at ``radius_m``, out past
+    ``REAPPROACH_FACTOR`` times it."""
+    if was_arrived:
+        return distance_m <= REAPPROACH_FACTOR * radius_m
+    return distance_m <= radius_m
 
 
 def track_config(conf: dict) -> TrackConfig:
@@ -46,12 +69,15 @@ class Guidance:
         self._next_setpoint_ns: int | None = None
         self._driving = False
         self._released = False
+        self._goto_radius_m = float(gd["goto_arrival_radius_m"])
+        self.goto_arrived = False
         self.state: TrackState | None = None
         self.actuation = Actuation()
 
     def take_order(self, order: GuidanceOrder, previous: GuidanceOrder, plan) -> None:
         """A new order is in force. Returning to the track re-acquires it: at the named waypoint, or
         the nearest leg, never the leg she left it on."""
+        self.goto_arrived = False
         if order.kind is Kind.TRACK and (
             previous.kind is not Kind.TRACK or order.resume_from_waypoint_id is not None
         ):
@@ -62,6 +88,21 @@ class Guidance:
         transient loss of inputs rather than re-acquiring."""
         self.state = self.track.follow(plan, own) if plan is not None and own is not None else None
         return self.state
+
+    def goto_radius_m(self, order: GuidanceOrder) -> float:
+        r = order.arrival_radius_m
+        return r if r is not None else self._goto_radius_m
+
+    def station(self, order: GuidanceOrder, own: Own | None) -> bool:
+        """Whether a go_to order has arrived, for conduct's sub-mode (HOLDING once arrived, per
+        keelson#308) and for the helm. Kept across a transient loss of own-ship."""
+        if order.kind is not Kind.GOTO:
+            self.goto_arrived = False
+        elif own is not None:
+            lat, lon = order.position
+            d = g.haversine_m(own.lat, own.lon, lat, lon)
+            self.goto_arrived = go_to_arrived(self.goto_arrived, d, self.goto_radius_m(order))
+        return self.goto_arrived
 
     def step(
         self,
@@ -83,24 +124,26 @@ class Guidance:
                 self._driving, self._released, self._next_setpoint_ns = True, False, None
             avoiding = advice is not None
             install = "install" if helm == FREE else None
-            if order.kind is Kind.HOLD and not avoiding:
+            arrived = order.kind is Kind.GOTO and self.goto_arrived
+            if (order.kind is Kind.HOLD or arrived) and not avoiding:
                 # Neutral helm and no throttle, published continuously: an ordered hold is still
                 # this process driving, not silence (silence is the failsafe's).
                 self.actuation = Actuation((0.0, 0.0), now_ns + self._hold_ns, install)
+                why = (
+                    f"arrived within {self.goto_radius_m(order):g} m of the go_to position: "
+                    "neutral helm, no throttle"
+                    if arrived
+                    else "ordered hold: neutral helm, no throttle"
+                )
                 return self._setpoint(
-                    now_ns,
-                    "PURPOSE_HOLDING",
-                    voyage_id,
-                    route_ref,
-                    None,
-                    0.0,
-                    0.0,
-                    "ordered hold: neutral helm, no throttle",
-                    None,
+                    now_ns, "PURPOSE_HOLDING", voyage_id, route_ref, None, 0.0, 0.0, why, None
                 )
             heading_frame = False
             if avoiding and advice.course_deg is not None:
                 helm_order = self.track.helm(advice.course_deg, own)
+            elif order.kind is Kind.GOTO and not avoiding:
+                lat, lon = order.position
+                helm_order = self.track.helm(g.bearing_deg(own.lat, own.lon, lat, lon), own)
             elif order.kind is Kind.COURSE and not avoiding:
                 helm_order = self.track.helm(order.value_deg, own)
             elif order.kind is Kind.HEADING and not avoiding:
@@ -118,6 +161,13 @@ class Guidance:
                 )
             elif order.speed_knots is not None:
                 sog, why = order.speed_knots, f"ordered speed {order.speed_knots:g} kn"
+            elif order.kind is Kind.GOTO and (own.sog_knots or 0.0) < self.speed.arrival_sog_knots:
+                # keelson#308 says the speed she has; a go_to is often given from a hold, where
+                # that is nothing and she would never leave.
+                sog, why = (
+                    self.speed.default_sog_knots,
+                    "go_to from a standstill: the default speed",
+                )
             elif order.steers_off_track and own.sog_knots is not None:
                 sog, why = (
                     own.sog_knots,
@@ -228,4 +278,19 @@ class Guidance:
             payload["cross_track_error_m"] = self.state.xte_m
         if advice is not None:
             payload["source_advice_id"] = advice.advice_id
-        return [Emit("navigation_setpoint", payload)]
+        out = [Emit("navigation_setpoint", payload)]
+        if order is not None:
+            # keelson#316: published by whoever holds the setpoint, absent when none is. The helm
+            # always steers to a heading; a course is the setpoint too unless the frame is heading.
+            stamp = payload["timestamp"]
+            out.append(
+                Emit("heading_setpoint_deg", {"timestamp": stamp, "value": order.heading_deg})
+            )
+            if not heading_frame:
+                out.append(
+                    Emit(
+                        "course_over_ground_setpoint_deg",
+                        {"timestamp": stamp, "value": order.course_deg},
+                    )
+                )
+        return out

@@ -11,27 +11,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The PyPI keelson wheel lags the monorepo, so build the SDK from source.
-      - uses: actions/checkout@v4
-        with:
-          repository: RISE-Maritime/keelson
-          ref: dev
-          path: keelson
-
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
 
-      - name: Generate keelson Python SDK
-        working-directory: keelson
-        run: |
-          uv sync --group dev
-          cd sdks/python && ./generate_python.sh
-
+      # keelson is the exact published version pinned in pyproject.toml, as locally. Building it
+      # from keelson `dev` tested against a tree without navigation_control/v1 and failed from
+      # 2026-09-19 on.
       - name: Install
         run: |
           uv venv --python 3.13
-          uv pip install ./keelson/sdks/python -e ".[dev]"
+          uv pip install -e ".[dev]"
 
       - name: Lint
         run: |
