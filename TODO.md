@@ -65,10 +65,15 @@ still water, so its make-back is proven only in the unit tests (`test_control.py
 follows the real flow (operator loads, then grants) and orders a heading mid-run: held to 0.0 deg,
 then back on track within 5 m after `track{}`.
 
-- [ ] Propose into keelson `navigation_conduct.yaml` (#282): the navigation process answers an
-  operator's `command_request` with a directed grant (`conduct.yield_on_request`, 2026-09-28).
-  Without it the protocol lets automation that was handed the conn keep it forever: a live lease
-  cannot be seized, and this one never lapses. Found live on alpha the day guidance went on.
+- [x] keelson#282 now requires it (`navigation_conduct.yaml` afeae39, 2026-09-28: purpose,
+  `navigation_process` reads `command_request`, flow `an_operator_takes_the_conn_back`, an
+  invariant), merged up into #308 and #320. This process implements it as
+  `conduct.yield_on_request`.
+- [ ] Mismatch with #282: the protocol says the process drops to `MODE_READY` once another station
+  holds the conn (`another_station_takes_the_conn`, and now `an_operator_takes_the_conn_back`).
+  This process reports `MODE_FALLBACK`: the neutral burst on a lost lease, which is why pulling the
+  lease stops her. Decide which is right: FALLBACK as the transition and READY as the settled state,
+  or a protocol change. Found 2026-09-28 writing the rule.
 - [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #320
   stacked on #308, #316).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.
