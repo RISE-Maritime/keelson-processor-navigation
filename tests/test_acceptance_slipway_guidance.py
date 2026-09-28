@@ -326,3 +326,45 @@ def test_a_go_to_makes_for_the_position_and_holds_there():
     assert h.p.conduct.mode is Mode.UNDERWAY
     state = h.call("get_navigation_state", {})
     assert state["guidance_order"] == order  # arrival ends the passage, never the order
+
+
+def test_a_loiter_drifts_by_the_position_and_makes_back_for_it():
+    """keelson#320's loiter on the kernel: make for a point off the route, go neutral near it, and
+    stay within the radius band -- making back if carried out past it."""
+    from nav.route_monitor import geodesy as g
+
+    h = Harbour()
+    h.run_until(Mode.UNDERWAY, 2.0)
+    h.run(30.0)
+    vessel = h.history[-1][2]
+    here = h.scenario.plane.wgs84_from_enu(vessel.east_m, vessel.north_m)
+    heading = h.history[-1][5]["heading_true_north_deg"]
+    centre = g.destination(*here, (heading + 90.0) % 360.0, 300.0)
+    radius = 100.0
+    order = {
+        "loiter": {
+            "position": {"latitude_deg": centre[0], "longitude_deg": centre[1]},
+            "radius_m": radius,
+            "return_speed_knots": 3.0,
+        },
+        "speed_knots": 6.0,
+    }
+    r = h.order(order)
+    assert r["result"] == "COMMAND_RESULT_ACCEPTED", r["detail"]
+    for _ in range(int(300 * S / h.scenario.dt_ns)):
+        h.step()
+        if h.p.conduct.sub_mode.value == "SUB_MODE_HOLDING":
+            break
+    else:
+        raise AssertionError(f"never drifting; {_distance_m(h, h.history[-1][2], centre):.0f} m")
+    drifting_at = h.history[-1][0]
+    print(f"drifting after {(drifting_at - h.history[0][0]) / S:.0f} s")
+    h.run(180.0)
+    after = [row for row in h.history if row[0] > drifting_at]
+    worst = max(_distance_m(h, row[2], centre) for row in after)
+    print(f"loiter: worst {worst:.0f} m from the position over 180 s (radius {radius:g} m)")
+    # Coasting on after going neutral may carry her past the radius once; she then makes back.
+    assert worst < 2 * radius
+    assert _distance_m(h, after[-1][2], centre) <= radius
+    assert h.p.conduct.mode is Mode.UNDERWAY
+    assert h.call("get_navigation_state", {})["guidance_order"] == order

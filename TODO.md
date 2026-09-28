@@ -55,15 +55,18 @@ Served with `modules.control` (`src/nav/control/`, `src/nav/bus/control.py`): `l
 (including the cross-vessel copy), `set_guidance_order` (track, course, heading, hold, speed),
 `set_voyage_status`, `get_navigation_state`. This processor is its vessel's only voyage writer
 while it runs. Tested in-process (`tests/test_control.py`) and over an isolated zenoh session
-(`tests/test_e2e_control.py`). keelson is pinned to the experimental build `0.6.0.dev11` from PyPI
-(`0.6.0-experimental.11`: dev + #282, #308, #316 and the rest in flight, the build Crowsnest and
-Slipway pin too); the monorepo build context is gone. `go_to` (keelson#308) and the
+(`tests/test_e2e_control.py`). keelson is pinned to the experimental build `0.6.0.dev12` from PyPI
+(`0.6.0-experimental.12`: dev + #282, #308, #316, #320 and the rest in flight, the build Crowsnest
+pins too); the monorepo build context is gone. `go_to` (keelson#308) and the
 `heading_setpoint_deg` / `course_over_ground_setpoint_deg` subjects (keelson#316) are served since
-2026-09-28. The Slipway acceptance test
+2026-09-28, and `loiter` (keelson#320) the same day; `dynamic_positioning` (#320) is refused
+UNSUPPORTED, since axes guidance has no lateral authority. The Slipway acceptance loiter ran in
+still water, so its make-back is proven only in the unit tests (`test_control.py`). The Slipway acceptance test
 follows the real flow (operator loads, then grants) and orders a heading mid-run: held to 0.0 deg,
 then back on track within 5 m after `track{}`.
 
-- [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #316).
+- [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #320
+  stacked on #308, #316).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.
 - [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
   review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its

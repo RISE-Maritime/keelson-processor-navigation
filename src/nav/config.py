@@ -127,6 +127,8 @@ GUIDANCE_DEFAULTS = {
     "min_sog_for_drift_knots": 1.0,
     # A go_to order without arrival_radius_m arrives here (keelson#308 leaves it to the process).
     "goto_arrival_radius_m": 20.0,
+    # A loiter without return_speed_knots makes back at this (keelson#320; Slipway's default).
+    "loiter_return_knots": 2.0,
 }
 
 CONTROL_DEFAULTS = {

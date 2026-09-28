@@ -7,7 +7,7 @@ import pytest
 from nav.bus.codec import Codec
 from nav.conduct.state import Mode
 from nav.guidance.axes import wanted_mapping
-from nav.guidance.guide import go_to_arrived
+from nav.guidance.guide import LoiterPhase, go_to_arrived, loiter_phase
 from nav.route_monitor import geodesy as g
 from nav.runtime import Processor
 from nav.world.latch import Sample
@@ -213,6 +213,27 @@ def test_arrival_releases_the_conn_and_the_mapping(guidance_conf):
 )
 def test_go_to_arrival_has_hysteresis(was, distance, now):
     assert go_to_arrived(was, distance, 20.0) is now
+
+
+@pytest.mark.parametrize(
+    "phase, distance, now",
+    [
+        ("transit", 21.0, "transit"),
+        ("transit", 20.0, "drifting"),  # near: the go_to arrival radius
+        ("drifting", 150.0, "drifting"),  # drifts right out to the radius
+        ("drifting", 150.1, "returning"),
+        ("returning", 21.0, "returning"),  # back until near, not merely inside the radius
+        ("returning", 20.0, "drifting"),
+    ],
+)
+def test_loiter_phases(phase, distance, now):
+    assert loiter_phase(LoiterPhase(phase), distance, 150.0, 20.0) is LoiterPhase(now)
+
+
+def test_a_small_loiter_is_not_sent_back_the_moment_it_goes_neutral():
+    # near is at most half the loiter radius, so a 30 m loiter goes neutral at 15 m, not 20.
+    assert loiter_phase(LoiterPhase.TRANSIT, 18.0, 30.0, 20.0) is LoiterPhase.TRANSIT
+    assert loiter_phase(LoiterPhase.TRANSIT, 15.0, 30.0, 20.0) is LoiterPhase.DRIFTING
 
 
 def test_guidance_publications_are_declared(guidance_conf):

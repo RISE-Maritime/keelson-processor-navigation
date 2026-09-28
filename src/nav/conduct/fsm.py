@@ -35,7 +35,7 @@ class Gates:
     avoiding: bool
     # control.orders.Kind value: track | course_over_ground_deg | heading_deg | hold | go_to
     order: str = "track"
-    station_held: bool = False  # a go_to order has arrived and holds there
+    station_held: bool = False  # a point order holds on its point: go_to arrived, loiter drifting
 
 
 @dataclass(frozen=True)
@@ -53,8 +53,9 @@ def _sub_mode(g: Gates) -> SubMode:
         return SubMode.AVOIDING
     if g.order == "hold":
         return SubMode.HOLDING
-    if g.order == "go_to":
-        # keelson#308: steering while she makes for the position, holding once arrived.
+    if g.order in ("go_to", "loiter"):
+        # keelson#308/#320: steering while she makes for the position (or back to it), holding
+        # once arrived or drifting.
         return SubMode.HOLDING if g.station_held else SubMode.STEERING
     if g.order in ("course_over_ground_deg", "heading_deg"):
         return SubMode.STEERING

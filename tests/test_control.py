@@ -135,6 +135,28 @@ def load(route_id="r1", edition=1, **kw) -> dict:
             },
             "speed_knots": 5.0,
         },
+        {"dynamic_positioning": {"position": {"latitude_deg": 57.7, "longitude_deg": 11.9}}},
+        {
+            "dynamic_positioning": {
+                "position": {"latitude_deg": 57.7, "longitude_deg": 11.9},
+                "heading_deg": 90.0,
+                "walk_speed_knots": 1.0,
+            }
+        },
+        {
+            "loiter": {
+                "position": {"latitude_deg": 57.7, "longitude_deg": 11.9},
+                "radius_m": 150.0,
+            }
+        },
+        {
+            "loiter": {
+                "position": {"latitude_deg": 57.7, "longitude_deg": 11.9},
+                "radius_m": 150.0,
+                "return_speed_knots": 2.5,
+            },
+            "speed_knots": 6.0,
+        },
     ],
 )
 def test_orders_round_trip_through_keelson_guidance_order(payload):
@@ -165,6 +187,28 @@ def test_orders_round_trip_through_keelson_guidance_order(payload):
             }
         },
         {"go_to": {"position": {"latitude_deg": 0.0, "longitude_deg": 0.0}}, "hold": {}},
+        {"loiter": {"position": {"latitude_deg": 0.0, "longitude_deg": 0.0}}},  # no radius
+        {"loiter": {"position": {"latitude_deg": 0.0, "longitude_deg": 0.0}, "radius_m": 0.0}},
+        {
+            "loiter": {
+                "position": {"latitude_deg": 0.0, "longitude_deg": 0.0},
+                "radius_m": 100.0,
+                "return_speed_knots": 0.0,
+            }
+        },
+        {"loiter": {"radius_m": 100.0}},
+        {
+            "dynamic_positioning": {
+                "position": {"latitude_deg": 0.0, "longitude_deg": 0.0},
+                "heading_deg": 360.0,
+            }
+        },
+        {
+            "dynamic_positioning": {
+                "position": {"latitude_deg": 0.0, "longitude_deg": 0.0},
+                "walk_speed_knots": -1.0,
+            }
+        },
     ],
 )
 def test_an_order_is_one_frame_with_a_usable_value(payload):
@@ -466,6 +510,62 @@ def test_setpoint_subjects_name_the_frame_the_helm_steers_by(control_conf):
     assert not rig.published("course_over_ground_setpoint_deg")
 
 
+def _loiter(lat, lon, radius, back=None) -> dict:
+    loiter: dict = {"position": {"latitude_deg": lat, "longitude_deg": lon}, "radius_m": radius}
+    if back is not None:
+        loiter["return_speed_knots"] = back
+    return {"loiter": loiter}
+
+
+def test_dynamic_positioning_is_refused_not_approximated(control_conf):
+    rig = _underway(control_conf)
+    dp = {
+        "dynamic_positioning": {
+            "position": {"latitude_deg": rig.pos[0], "longitude_deg": rig.pos[1]},
+            "heading_deg": 90.0,
+        }
+    }
+    p = rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": dp})
+    assert p.response["result"] == "COMMAND_RESULT_UNSUPPORTED"
+    assert "lateral authority" in p.response["detail"]
+    assert rig.p.order.kind is Kind.TRACK  # nothing taken up in its place
+
+
+def test_a_loiter_makes_for_the_point_drifts_and_makes_back_past_the_radius(control_conf):
+    rig = _underway(control_conf)
+    centre = g.destination(*rig.pos, 90.0, 500.0)
+    order = _loiter(*centre, 150.0, back=3.0)
+    p = rig.call("set_guidance_order", {"caller": caller(token="grant-1"), "order": order})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_STEERING"  # on passage
+    assert rig.published("navigation_state")[-1].payload["guidance_order"] == order
+
+    # Near the point she goes neutral and drifts; drifting inside the radius stays neutral.
+    for distance, sub_mode in ((10.0, "HOLDING"), (120.0, "HOLDING")):
+        rig.pos = g.destination(*centre, 270.0, distance)
+        rig.run(0.5)
+        assert rig.p.conduct.sub_mode.value == f"SUB_MODE_{sub_mode}", distance
+        assert rig.p.actuation.axes == (0.0, 0.0)
+    rig.out.clear()
+    rig.run(1.0)
+    assert not rig.published("heading_setpoint_deg")  # no setpoint while drifting
+
+    # Carried past the radius: back at the return speed, until near the point again.
+    rig.pos = g.destination(*centre, 270.0, 160.0)
+    rig.run(1.0)
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_STEERING"
+    setpoint = rig.published("navigation_setpoint")[-1].payload
+    assert setpoint["propulsion"]["sog_mps"] / KNOT_MPS == pytest.approx(3.0)
+    assert abs(setpoint["steering"]["course_over_ground_deg"] - 90.0) < 0.5
+    rig.pos = g.destination(*centre, 270.0, 60.0)  # coming back, not yet near: still steering
+    rig.run(0.5)
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_STEERING"
+    rig.pos = g.destination(*centre, 270.0, 10.0)
+    rig.run(0.5)
+    assert rig.p.conduct.sub_mode.value == "SUB_MODE_HOLDING"
+
+
 def test_a_waypoint_not_on_the_route_is_refused(control_conf):
     rig = _underway(control_conf)
     p = rig.call(
@@ -493,6 +593,10 @@ def test_without_guidance_only_track_is_held(monitor_only):
     assert p.response["result"] == "COMMAND_RESULT_UNSUPPORTED"
     r = rig.call("set_guidance_order", {"caller": caller(token="T"), "order": _go_to(57.7, 11.9)})
     assert r.response["result"] == "COMMAND_RESULT_UNSUPPORTED"
+    lo = rig.call(
+        "set_guidance_order", {"caller": caller(token="T"), "order": _loiter(57.7, 11.9, 100.0)}
+    )
+    assert lo.response["result"] == "COMMAND_RESULT_UNSUPPORTED"
     q = rig.call("set_guidance_order", {"caller": caller(token="T"), "order": {"track": {}}})
     assert q.response["result"] == "COMMAND_RESULT_ACCEPTED"
 

@@ -141,7 +141,7 @@ writer of its vessel's `voyage` records. Each call is queued and decided in the 
 | Procedure | Does |
 |---|---|
 | `load_route` | Makes a route edition the ACTIVE voyage (minted, or the `voyage_id` given). A route from another vessel (`source_entity_id`) is read from router storage and republished unchanged under this vessel, edition and `latest`, first. Any other ACTIVE voyage is ABORTED as superseded. A missing edition is refused, never replaced by `latest` |
-| `set_guidance_order` | `track` (optionally rejoining at a waypoint id), `course_over_ground_deg`, `heading_deg`, `hold` or `go_to` (keelson#308: a position and an optional `arrival_radius_m`, default `guidance.goto_arrival_radius_m`), with an optional `speed_knots`. Course and heading keep their frames: a course is corrected for drift, a heading is not. Without guidance, only `track` is accepted |
+| `set_guidance_order` | `track` (optionally rejoining at a waypoint id), `course_over_ground_deg`, `heading_deg`, `hold`, `go_to` (keelson#308: a position and an optional `arrival_radius_m`, default `guidance.goto_arrival_radius_m`) or `loiter` (keelson#320: a position, `radius_m` and an optional `return_speed_knots`, default `guidance.loiter_return_knots`), with an optional `speed_knots`. `dynamic_positioning` (keelson#320) is refused UNSUPPORTED: guidance drives steering and throttle only, with no lateral authority to hold a position and a heading. Course and heading keep their frames: a course is corrected for drift, a heading is not. Without guidance, only `track` is accepted |
 | `set_voyage_status` | Pause, resume, complete or abort. Every change returns the order to `track` |
 | `get_navigation_state` | The `keelson.NavigationState` it would broadcast now. Needs no authority |
 
@@ -160,7 +160,9 @@ standstill; inside the radius it holds with neutral axes (`SUB_MODE_HOLDING`, th
 force), and makes for the position again once she drifts out past twice the radius. While it steers,
 guidance also publishes keelson#316's `heading_setpoint_deg` and, unless the frame is a heading,
 `course_over_ground_setpoint_deg` (TimestampedFloat, `navigation/0/guidance`); neither is published
-while it holds or goes neutral. An order is
+while it holds or goes neutral. A `loiter` makes for its position like a go_to, lies neutral once
+near it (`SUB_MODE_HOLDING`), and past `radius_m` makes back at the return speed (`SUB_MODE_STEERING`)
+until near it again. An order is
 given for a voyage: once that voyage is no longer the one selected, guidance returns to the track.
 Every call that changes something is in the decision log (`KIND_VOYAGE_CHANGED`,
 `KIND_GUIDANCE_ORDER`), with the voyage's own `audit_trail` naming the caller.

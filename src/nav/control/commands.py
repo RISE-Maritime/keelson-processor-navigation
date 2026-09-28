@@ -18,6 +18,14 @@ from ..bus.codec import rfc3339
 from ..world.route import RoutePlan, RouteRef, VoyagePlan
 from .orders import TRACK, GuidanceOrder, Kind, OrderError
 
+# keelson#320: DP holds a position AND a heading, which needs lateral authority. Guidance drives
+# only vehicle_control's steering and throttle axes (config refuses any other backend), so it is
+# refused, never approximated by a go_to or a loiter.
+NO_DP = (
+    "dynamic_positioning needs lateral authority: guidance here steers by vehicle_control "
+    "steering and throttle only"
+)
+
 PROCEDURES = ("load_route", "set_guidance_order", "set_voyage_status", "get_navigation_state")
 
 ACCEPTED = "COMMAND_RESULT_ACCEPTED"
@@ -159,6 +167,8 @@ class Controller:
         if not route_id:
             raise InvalidRequest("route_ref.route_id is empty")
         order = self._order(req["initial_order"], ctx) if "initial_order" in req else TRACK
+        if order.kind is Kind.DP:
+            return Outcome(UNSUPPORTED, NO_DP)
         if order.kind is not Kind.TRACK and not ctx.guidance:
             return Outcome(UNSUPPORTED, "guidance is disabled here: only a track order is held")
         source = req.get("source_entity_id") or ctx.entity_id
@@ -246,6 +256,8 @@ class Controller:
         if "order" not in req:
             raise InvalidRequest("no order")
         order = self._order(req["order"], ctx)
+        if order.kind is Kind.DP:
+            return Outcome(UNSUPPORTED, NO_DP)
         if order.kind is not Kind.TRACK and not ctx.guidance:
             return Outcome(UNSUPPORTED, "guidance is disabled here: only a track order is held")
         active = [v for v in ctx.voyages.values() if v.status == ACTIVE]

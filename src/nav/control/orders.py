@@ -24,6 +24,8 @@ class Kind(StrEnum):
     HEADING = "heading_deg"
     HOLD = "hold"
     GOTO = "go_to"
+    DP = "dynamic_positioning"  # keelson#320
+    LOITER = "loiter"  # keelson#320
 
 
 @dataclass(frozen=True)
@@ -32,12 +34,20 @@ class GuidanceOrder:
     value_deg: float | None = None  # COURSE and HEADING only
     resume_from_waypoint_id: str | None = None  # TRACK only
     speed_knots: float | None = None
-    position: tuple[float, float] | None = None  # GOTO only: (lat, lon)
+    position: tuple[float, float] | None = None  # GOTO, DP, LOITER: (lat, lon)
     arrival_radius_m: float | None = None  # GOTO only; None = the configured default
+    radius_m: float | None = None  # LOITER only: how far she may drift
+    return_speed_knots: float | None = None  # LOITER only; None = the configured default
+    walk_speed_knots: float | None = None  # DP only; value_deg is DP's heading
 
     @property
     def steers_off_track(self) -> bool:
-        return self.kind in (Kind.COURSE, Kind.HEADING, Kind.GOTO)
+        return self.kind in (Kind.COURSE, Kind.HEADING, Kind.GOTO, Kind.DP, Kind.LOITER)
+
+    @property
+    def point(self) -> bool:
+        """An order to make for a position: go_to, dynamic_positioning, loiter."""
+        return self.kind in (Kind.GOTO, Kind.DP, Kind.LOITER)
 
     def to_payload(self) -> dict:
         """Protobuf JSON mapping of keelson.GuidanceOrder."""
@@ -54,6 +64,18 @@ class GuidanceOrder:
             if self.arrival_radius_m is not None:
                 go_to["arrival_radius_m"] = self.arrival_radius_m
             payload = {"go_to": go_to}
+        elif self.kind is Kind.DP:
+            dp: dict = {"position": _coordinate(self.position)}
+            if self.value_deg is not None:
+                dp["heading_deg"] = self.value_deg
+            if self.walk_speed_knots is not None:
+                dp["walk_speed_knots"] = self.walk_speed_knots
+            payload = {"dynamic_positioning": dp}
+        elif self.kind is Kind.LOITER:
+            loiter: dict = {"position": _coordinate(self.position), "radius_m": self.radius_m}
+            if self.return_speed_knots is not None:
+                loiter["return_speed_knots"] = self.return_speed_knots
+            payload = {"loiter": loiter}
         else:
             payload = {self.kind.value: self.value_deg}
         if self.speed_knots is not None:
@@ -68,7 +90,8 @@ class GuidanceOrder:
         frames = [k for k in Kind if k.value in payload]
         if len(frames) != 1:
             raise OrderError(
-                "a guidance order needs exactly one of track, course, heading, hold, go_to"
+                "a guidance order needs exactly one of track, course, heading, hold, go_to, "
+                "dynamic_positioning, loiter"
             )
         kind = frames[0]
         speed = payload.get("speed_knots")
@@ -84,6 +107,10 @@ class GuidanceOrder:
             return cls(Kind.HOLD, None, None, speed)
         if kind is Kind.GOTO:
             return cls._go_to(payload["go_to"] or {}, speed)
+        if kind is Kind.DP:
+            return cls._dp(payload["dynamic_positioning"] or {}, speed)
+        if kind is Kind.LOITER:
+            return cls._loiter(payload["loiter"] or {}, speed)
         value = float(payload[kind.value])
         if not math.isfinite(value) or not 0.0 <= value < 360.0:
             raise OrderError(f"{kind.value} must be in [0, 360), not {value}")
@@ -91,22 +118,37 @@ class GuidanceOrder:
 
     @classmethod
     def _go_to(cls, go_to: dict, speed: float | None) -> GuidanceOrder:
-        position = go_to.get("position") or {}
-        try:
-            lat = float(position["latitude_deg"])
-            lon = float(position["longitude_deg"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise OrderError("go_to needs a position with latitude_deg and longitude_deg") from exc
-        if not (math.isfinite(lat) and -90.0 <= lat <= 90.0):
-            raise OrderError(f"go_to latitude_deg must be in [-90, 90], not {lat}")
-        if not (math.isfinite(lon) and -180.0 <= lon <= 180.0):
-            raise OrderError(f"go_to longitude_deg must be in [-180, 180], not {lon}")
+        position = _position("go_to", go_to)
         radius = go_to.get("arrival_radius_m")
         if radius is not None:
             radius = float(radius)
             if not math.isfinite(radius) or radius < 0:
                 raise OrderError(f"go_to arrival_radius_m must be non-negative, not {radius}")
-        return cls(Kind.GOTO, None, None, speed, (lat, lon), radius)
+        return cls(Kind.GOTO, None, None, speed, position, radius)
+
+    @classmethod
+    def _dp(cls, dp: dict, speed: float | None) -> GuidanceOrder:
+        position = _position("dynamic_positioning", dp)
+        heading = dp.get("heading_deg")
+        if heading is not None:
+            heading = float(heading)
+            if not math.isfinite(heading) or not 0.0 <= heading < 360.0:
+                raise OrderError(
+                    f"dynamic_positioning heading_deg must be in [0, 360), not {heading}"
+                )
+        walk = _positive("dynamic_positioning walk_speed_knots", dp.get("walk_speed_knots"))
+        return cls(Kind.DP, heading, None, speed, position, walk_speed_knots=walk)
+
+    @classmethod
+    def _loiter(cls, loiter: dict, speed: float | None) -> GuidanceOrder:
+        position = _position("loiter", loiter)
+        radius = _positive("loiter radius_m", loiter.get("radius_m"))
+        if radius is None:
+            raise OrderError("loiter needs a radius_m greater than 0")
+        back = _positive("loiter return_speed_knots", loiter.get("return_speed_knots"))
+        return cls(
+            Kind.LOITER, None, None, speed, position, radius_m=radius, return_speed_knots=back
+        )
 
     def describe(self) -> str:
         speed = f" at {self.speed_knots:g} kn" if self.speed_knots is not None else ""
@@ -119,6 +161,13 @@ class GuidanceOrder:
             return f"track{resume}{speed}"
         if self.kind is Kind.HOLD:
             return "hold"
+        if self.kind is Kind.DP:
+            lat, lon = self.position
+            hdg = f" heading {self.value_deg:05.1f}" if self.value_deg is not None else ""
+            return f"dynamic positioning at {lat:.5f}, {lon:.5f}{hdg}"
+        if self.kind is Kind.LOITER:
+            lat, lon = self.position
+            return f"loiter {self.radius_m:g} m round {lat:.5f}, {lon:.5f}{speed}"
         if self.kind is Kind.GOTO:
             lat, lon = self.position
             within = (
@@ -127,6 +176,34 @@ class GuidanceOrder:
             return f"go to {lat:.5f}, {lon:.5f}{within}{speed}"
         frame = "course" if self.kind is Kind.COURSE else "heading"
         return f"{frame} {self.value_deg:05.1f}{speed}"
+
+
+def _coordinate(position: tuple[float, float]) -> dict:
+    lat, lon = position
+    return {"latitude_deg": lat, "longitude_deg": lon}
+
+
+def _position(frame: str, body: dict) -> tuple[float, float]:
+    position = body.get("position") or {}
+    try:
+        lat = float(position["latitude_deg"])
+        lon = float(position["longitude_deg"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise OrderError(f"{frame} needs a position with latitude_deg and longitude_deg") from exc
+    if not (math.isfinite(lat) and -90.0 <= lat <= 90.0):
+        raise OrderError(f"{frame} latitude_deg must be in [-90, 90], not {lat}")
+    if not (math.isfinite(lon) and -180.0 <= lon <= 180.0):
+        raise OrderError(f"{frame} longitude_deg must be in [-180, 180], not {lon}")
+    return lat, lon
+
+
+def _positive(name: str, value) -> float | None:
+    if value is None:
+        return None
+    v = float(value)
+    if not math.isfinite(v) or v <= 0:
+        raise OrderError(f"{name} must be greater than 0, not {v}")
+    return v
 
 
 TRACK = GuidanceOrder()

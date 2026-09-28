@@ -8,6 +8,7 @@ record at ``setpoint_hz``.
 from __future__ import annotations
 
 from dataclasses import fields
+from enum import StrEnum
 
 from ..bus.codec import rfc3339
 from ..control.orders import TRACK, GuidanceOrder, Kind
@@ -35,6 +36,22 @@ SUBJECTS = (
 # once she has drifted out past this multiple of the arrival radius, so she does not hunt at its
 # edge.
 REAPPROACH_FACTOR = 2.0
+
+
+class LoiterPhase(StrEnum):
+    TRANSIT = "transit"  # making for the position
+    DRIFTING = "drifting"  # neutral, with wind and stream
+    RETURNING = "returning"  # carried past the radius, making back
+
+
+def loiter_phase(phase: LoiterPhase, distance_m: float, radius_m: float, near_m: float):
+    """keelson#320's loiter: neutral once near the position, back past ``radius_m``, neutral again
+    once near. ``near_m`` is the go_to arrival radius, never more than half the loiter radius, so
+    she is not sent back the moment she goes neutral."""
+    near = min(near_m, 0.5 * radius_m)
+    if phase is LoiterPhase.DRIFTING:
+        return LoiterPhase.RETURNING if distance_m > radius_m else phase
+    return LoiterPhase.DRIFTING if distance_m <= near else phase
 
 
 def go_to_arrived(was_arrived: bool, distance_m: float, radius_m: float) -> bool:
@@ -70,7 +87,9 @@ class Guidance:
         self._driving = False
         self._released = False
         self._goto_radius_m = float(gd["goto_arrival_radius_m"])
+        self._loiter_return_knots = float(gd["loiter_return_knots"])
         self.goto_arrived = False
+        self.loiter = LoiterPhase.TRANSIT
         self.state: TrackState | None = None
         self.actuation = Actuation()
 
@@ -78,6 +97,7 @@ class Guidance:
         """A new order is in force. Returning to the track re-acquires it: at the named waypoint, or
         the nearest leg, never the leg she left it on."""
         self.goto_arrived = False
+        self.loiter = LoiterPhase.TRANSIT
         if order.kind is Kind.TRACK and (
             previous.kind is not Kind.TRACK or order.resume_from_waypoint_id is not None
         ):
@@ -94,15 +114,22 @@ class Guidance:
         return r if r is not None else self._goto_radius_m
 
     def station(self, order: GuidanceOrder, own: Own | None) -> bool:
-        """Whether a go_to order has arrived, for conduct's sub-mode (HOLDING once arrived, per
-        keelson#308) and for the helm. Kept across a transient loss of own-ship."""
-        if order.kind is not Kind.GOTO:
-            self.goto_arrived = False
-        elif own is not None:
+        """Whether a point order is holding on its point -- a go_to arrived (keelson#308), a loiter
+        drifting (keelson#320) -- for conduct's sub-mode and for the helm. Kept across a transient
+        loss of own-ship."""
+        if order.kind not in (Kind.GOTO, Kind.LOITER):
+            self.goto_arrived, self.loiter = False, LoiterPhase.TRANSIT
+            return False
+        if own is not None:
             lat, lon = order.position
             d = g.haversine_m(own.lat, own.lon, lat, lon)
-            self.goto_arrived = go_to_arrived(self.goto_arrived, d, self.goto_radius_m(order))
-        return self.goto_arrived
+            if order.kind is Kind.GOTO:
+                self.goto_arrived = go_to_arrived(self.goto_arrived, d, self.goto_radius_m(order))
+            else:
+                self.loiter = loiter_phase(self.loiter, d, order.radius_m, self._goto_radius_m)
+        if order.kind is Kind.GOTO:
+            return self.goto_arrived
+        return self.loiter is LoiterPhase.DRIFTING
 
     def step(
         self,
@@ -125,23 +152,27 @@ class Guidance:
             avoiding = advice is not None
             install = "install" if helm == FREE else None
             arrived = order.kind is Kind.GOTO and self.goto_arrived
-            if (order.kind is Kind.HOLD or arrived) and not avoiding:
+            drifting = order.kind is Kind.LOITER and self.loiter is LoiterPhase.DRIFTING
+            if (order.kind is Kind.HOLD or arrived or drifting) and not avoiding:
                 # Neutral helm and no throttle, published continuously: an ordered hold is still
                 # this process driving, not silence (silence is the failsafe's).
                 self.actuation = Actuation((0.0, 0.0), now_ns + self._hold_ns, install)
-                why = (
-                    f"arrived within {self.goto_radius_m(order):g} m of the go_to position: "
-                    "neutral helm, no throttle"
-                    if arrived
-                    else "ordered hold: neutral helm, no throttle"
-                )
+                if arrived:
+                    why = (
+                        f"arrived within {self.goto_radius_m(order):g} m of the go_to position: "
+                        "neutral helm, no throttle"
+                    )
+                elif drifting:
+                    why = f"loiter: drifting inside {order.radius_m:g} m, neutral helm, no throttle"
+                else:
+                    why = "ordered hold: neutral helm, no throttle"
                 return self._setpoint(
                     now_ns, "PURPOSE_HOLDING", voyage_id, route_ref, None, 0.0, 0.0, why, None
                 )
             heading_frame = False
             if avoiding and advice.course_deg is not None:
                 helm_order = self.track.helm(advice.course_deg, own)
-            elif order.kind is Kind.GOTO and not avoiding:
+            elif order.kind in (Kind.GOTO, Kind.LOITER) and not avoiding:
                 lat, lon = order.position
                 helm_order = self.track.helm(g.bearing_deg(own.lat, own.lon, lat, lon), own)
             elif order.kind is Kind.COURSE and not avoiding:
@@ -159,14 +190,21 @@ class Guidance:
                     restricted_visibility,
                     advice.sog_knots,
                 )
+            elif order.kind is Kind.LOITER and self.loiter is LoiterPhase.RETURNING:
+                # Not the passage speed: keelson#320 makes back at return_speed_knots.
+                back = order.return_speed_knots or self._loiter_return_knots
+                sog, why = back, f"loiter: carried past {order.radius_m:g} m, back at {back:g} kn"
             elif order.speed_knots is not None:
                 sog, why = order.speed_knots, f"ordered speed {order.speed_knots:g} kn"
-            elif order.kind is Kind.GOTO and (own.sog_knots or 0.0) < self.speed.arrival_sog_knots:
+            elif (
+                order.kind in (Kind.GOTO, Kind.LOITER)
+                and (own.sog_knots or 0.0) < self.speed.arrival_sog_knots
+            ):
                 # keelson#308 says the speed she has; a go_to is often given from a hold, where
-                # that is nothing and she would never leave.
+                # that is nothing and she would never leave. A loiter's passage likewise.
                 sog, why = (
                     self.speed.default_sog_knots,
-                    "go_to from a standstill: the default speed",
+                    f"{order.kind.value} from a standstill: the default speed",
                 )
             elif order.steers_off_track and own.sog_knots is not None:
                 sog, why = (
