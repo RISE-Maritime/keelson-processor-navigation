@@ -116,6 +116,15 @@ class Processor:
         self._own_payload: dict | None = None
         self._last_lease_event: str | None = None
         self._ignored_requesters: set[str] = set()
+        # Carrying out an operator's order under the operator's conn (navigation_conduct): the
+        # operator keeps the conn, this process is the layer that carries the order out. An order
+        # from a live conn holder bumps _holder_orders; standing down (lease lapsed, helm taken,
+        # voyage ended, FALLBACK) catches _stood_down_at up, so only a NEW order re-arms it.
+        self._holder_orders = 0
+        self._stood_down_at = 0
+        self._directed_voyage: str | None = None
+        self._directed_by: str | None = None
+        self.directed = False
 
     def enabled(self, module: str) -> bool:
         return bool(self.conf["modules"].get(module))
@@ -295,6 +304,13 @@ class Processor:
                     self._decide(now_ns, kind, source, summary)
                 if outcome.order is not None:
                     self._take_order(outcome.order, outcome.voyage_id)
+                if (
+                    outcome.from_holder
+                    and holder is not None
+                    and not is_navigation_process(holder.controller_id)
+                ):
+                    self._holder_orders += 1
+                    self._directed_voyage = outcome.voyage_id
                 if outcome.settings:
                     self._apply_settings(outcome.settings)
             answered.append((pending, outcome))
@@ -426,6 +442,8 @@ class Processor:
         progress = self.monitor.status.progress if self.monitor is not None else None
         arrived = track.arrived if track is not None else bool(progress and progress.arrived)
         self.conn_held = self.lease.held(self.lease_book, now_ns)
+        holder = self.lease_book.holder(now_ns)
+        self.directed = self._directed(now_ns, holder)
         route_reason = self.selection.reason
         if self.monitor is None and plan is not None:
             route_reason += "; route_monitor disabled"
@@ -446,6 +464,10 @@ class Processor:
                 avoiding=accepted is not None,
                 order=self.order.kind.value,
                 station_held=station_held,
+                directed=self.directed,
+                directed_by=self._directed_by or "",
+                order_serial=self._holder_orders,
+                conn_holder=holder.controller_id if holder is not None else None,
             )
         )
         if step.changed:
@@ -462,6 +484,14 @@ class Processor:
             )
 
         mode = step.mode
+        if self.directed and mode in (Mode.FALLBACK, Mode.ENDED):
+            self._stand_down(now_ns, step.reason)
+            self.directed = False
+        if step.changed and mode is Mode.FALLBACK and step.before is Mode.UNDERWAY:
+            if self.conduct.under_order and self.guidance is not None:
+                # It acted only on the holder's behalf: once silent, free the helm for the
+                # operator, as when it hands its own conn over.
+                self.guidance.release_helm()
         want = (
             self.guidance is not None
             and plan is not None
@@ -522,6 +552,51 @@ class Processor:
                 )
             ]
         return out
+
+    def _directed(self, now_ns: int, holder) -> bool:
+        """True while it carries out the live conn holder's order under that holder's conn: an
+        operator (not this process, not another navigation process) holds a live lease and has
+        ordered it, for the voyage now selected, since it last stood down. A handover between
+        operators keeps the order in force under the new holder."""
+        voyage = self.selection.voyage
+        why = None
+        if holder is None:
+            why = "the conn holder's lease lapsed"
+        elif self.conn_held:
+            why = "this process now holds the conn itself"
+        elif holder.controller_id == self.lease.cfg.controller_id or is_navigation_process(
+            holder.controller_id
+        ):
+            why = f"the conn is now {holder.controller_id}'s"
+        elif voyage is None or voyage.voyage_id != self._directed_voyage:
+            why = f"voyage {self._directed_voyage} is no longer the one selected"
+        if why is not None:
+            self._stand_down(now_ns, why)
+            return False
+        if self._holder_orders <= self._stood_down_at:
+            return False
+        if self._directed_by is not None and self._directed_by != holder.controller_id:
+            self._decide(
+                now_ns,
+                "KIND_GUIDANCE_ORDER",
+                config_mod.module_source_id(self.conf, "conduct"),
+                f"order {self.order.describe()} stays in force: the conn passed from "
+                f"{self._directed_by} to {holder.controller_id}",
+            )
+        self._directed_by = holder.controller_id
+        return True
+
+    def _stand_down(self, now_ns: int, why: str) -> None:
+        """No order in force from a conn holder any more; only a new one re-arms it."""
+        if self._directed_by is not None:
+            self._decide(
+                now_ns,
+                "KIND_GUIDANCE_ORDER",
+                config_mod.module_source_id(self.conf, "conduct"),
+                f"no longer carrying out the order of {self._directed_by}: {why}",
+            )
+        self._stood_down_at = self._holder_orders
+        self._directed_by = None
 
     def _auto_accept(self, now_ns: int) -> list[Output]:
         """Accept the advisor's undecided advice when the conn is held, guidance is UNDERWAY and

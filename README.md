@@ -5,9 +5,9 @@ autonomous vessel (MASS, USV) while it is under automation.
 
 > **Status: Phase 4, guidance and conduct.** It monitors the vessel's route, tracks traffic with
 > CPA, and classifies encounters under COLREG Rules 13 to 19. With `guidance` enabled it also
-> **commands the vessel** over `vehicle_control/v1`, but only while it holds the conn, the
-> operational authority level allows driving, own-ship inputs are fresh and the control mapping is
-> free or its own. Accepted on Slipway's kernel in-process; not yet run on a shared bus. Advice
+> **commands the vessel** over `vehicle_control/v1`, but only on a live conn -- an operator's
+> whose order it carries out, or its own under full automation -- while the operational authority
+> level allows driving, own-ship inputs are fresh and the control mapping is free or its own. Accepted on Slipway's kernel in-process; not yet run on a shared bus. Advice
 > stays a record: guidance acts on it only once accepted. See [TODO.md](TODO.md) and
 > [docs/PLAN.md](docs/PLAN.md).
 
@@ -120,13 +120,16 @@ registers a subject, `codec: proto` publishes it typed with no other change.
 
 What the state machine guarantees:
 
-- **UNDERWAY** needs the conn, a level of `REMOTE_CONTROLLED` or above, fresh position, heading,
-  course and speed, and a control mapping that is free or already this processor's. Another
-  controller's mapping is reported, never overwritten.
+- **UNDERWAY** needs a live conn -- the operator's, who has ordered it, or its own -- a level of
+  `REMOTE_CONTROLLED` or above, fresh position, heading, course and speed, and a control mapping
+  that is free or already this processor's. Another controller's mapping is reported, never
+  overwritten. A route must be selected either way.
 - **Losing any of them** is FALLBACK: neutral axes for `neutral_burst_s`, then silence, so the
-  vehicle's dead-man stops the hull. Arrival does the same, then releases the conn.
+  vehicle's dead-man stops the hull. Arrival does the same, then releases the conn (under an
+  operator's conn there is none to release, and it ends at once).
 - **Pulling the lease stops the vessel.** After a FALLBACK the processor does not take the conn
-  back, even with `take_conn_when_free`; only a grant naming it resumes.
+  back, even with `take_conn_when_free`; only a grant naming it, or a new order from the live conn
+  holder, resumes.
 - **A stalled tick loop goes silent.** Axes are repeated only until `command_hold_s` after the
   last tick.
 
@@ -154,6 +157,22 @@ taking the conn outranks the list. Everyone else is `DENIED`. Holding no route, 
 a granted conn straight back, so an operator loads the route while it holds the conn and grants it
 after; a permitted scenario runner loads it while the conn is free, and `take_conn_when_free` does
 the rest.
+
+**The operator keeps the conn; the process carries out the order** (keelson#282
+`navigation_conduct`, Ted 2026-09-29). The human operator holding the conn carries the captain's
+responsibility and keeps it. Once the live conn holder has ordered this process -- `load_route` or
+`set_guidance_order` presenting that holder's token -- it sails the order under the holder's conn:
+`MODE_UNDERWAY` with `conn_held=false`, reason "…; carrying out the order of ted@roc1, …". It never
+takes the lease for this. A voyage it merely finds selected, with the default `track`, is not such
+an order, and neither is `set_voyage_status`: it sits READY with "conn not held, and the conn holder
+has given no order". The conn passing to another operator keeps the order in force under the new
+holder (logged). It stands down to FALLBACK when the holder's lease lapses ("the conn holder's lease
+lapsed"), when a station takes the helm mapping ("a station took the helm …"), or when the voyage it
+was given for is no longer selected; arrival ends it. Standing down from an operator's order also
+releases its axis mapping once it has gone silent, so the operator's helm is free. Only a **new** order from the live holder
+re-arms it. Holding the conn itself is full automation: only then does it take navigation decisions
+of its own (`auto_accept_advice`); under an operator's conn advice stays advice until the holder
+accepts it.
 
 **Getting the conn back.** A live lease cannot be seized, and this process heartbeats its lease
 for as long as it has a route, so it answers `command_request` (`conduct.yield_on_request`, on by

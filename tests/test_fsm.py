@@ -172,3 +172,80 @@ def test_a_step_reports_whether_the_mode_changed():
     first = c.step(GOOD)
     assert first.changed and first.before is Mode.READY
     assert not c.step(GOOD).changed
+
+
+# -- carrying out the conn holder's order (navigation_conduct, 2026-09-29) ----------------------
+
+DIRECTED = replace(
+    GOOD,
+    conn_held=False,
+    conn_token=None,
+    conn_self_issued=False,
+    directed=True,
+    directed_by="ted@roc1",
+    order_serial=1,
+    conn_holder="ted@roc1",
+)
+
+
+def _directed_underway() -> Conduct:
+    c = machine_in(Mode.READY)
+    step = c.step(DIRECTED)
+    assert step.mode is Mode.UNDERWAY, step.reason
+    return c
+
+
+def test_an_order_from_the_conn_holder_gets_her_underway_without_the_conn():
+    c = machine_in(Mode.READY)
+    step = c.step(DIRECTED)
+    assert step.mode is Mode.UNDERWAY and step.sub_mode is SubMode.TRACK
+    assert "carrying out the order of ted@roc1" in step.reason
+    assert "conn held" not in step.reason
+
+
+def test_without_an_order_from_the_holder_she_stays_ready():
+    c = machine_in(Mode.READY)
+    step = c.step(replace(DIRECTED, directed=False, order_serial=0))
+    assert step.mode is Mode.READY
+    assert "no order" in step.reason
+
+
+@pytest.mark.parametrize(
+    ("bad", "reason"),
+    [
+        (dict(directed=False, conn_holder=None), "the conn holder's lease lapsed"),
+        (dict(helm="other"), "a station took the helm"),
+        (dict(directed=False, helm="other"), "a station took the helm"),
+        (dict(directed=False, conn_holder="navigation/1@x"), "has given no order"),
+    ],
+)
+def test_the_holders_lease_lapsing_or_the_helm_taken_is_fallback(bad, reason):
+    c = _directed_underway()
+    step = c.step(replace(DIRECTED, **bad))
+    assert step.mode is Mode.FALLBACK
+    assert reason in step.reason
+
+
+def test_only_a_new_order_from_the_holder_re_arms_fallback():
+    c = _directed_underway()
+    c.step(replace(DIRECTED, directed=False, conn_holder=None))
+    assert c.mode is Mode.FALLBACK
+    # The same order again (the serial it fell back on) is not a new order.
+    assert c.step(DIRECTED).mode is Mode.FALLBACK
+    step = c.step(replace(DIRECTED, order_serial=2))
+    assert step.mode is Mode.READY and "new order from the conn holder ted@roc1" in step.reason
+    assert c.step(replace(DIRECTED, order_serial=2)).mode is Mode.UNDERWAY
+
+
+def test_arrival_under_the_holders_order_ends_at_once():
+    c = _directed_underway()
+    assert c.step(replace(DIRECTED, arrived=True)).mode is Mode.ARRIVED
+    step = c.step(replace(DIRECTED, arrived=True))
+    assert step.mode is Mode.ENDED and "order is carried out" in step.reason
+
+
+def test_a_handover_between_operators_keeps_her_underway_under_the_new_holder():
+    c = _directed_underway()
+    step = c.step(replace(DIRECTED, directed_by="anna@roc2", conn_holder="anna@roc2"))
+    assert step.mode is Mode.UNDERWAY and not step.changed
+    assert "carrying out the order of anna@roc2" in step.reason

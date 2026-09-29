@@ -47,7 +47,8 @@ Deployed as a keelson-platforms platform service for `slipway-usv-alpha`
 (`platforms/slipway-usv-alpha/docker-compose.navigation.yml`), **with guidance on since 2026-09-28**
 (keelson-platforms `5079f53`). The autopilot container is removed and its stale axis mapping cleared.
 The conn is given, never taken (`take_conn_when_free: false`); live, it sits READY with "conn not
-held" until an operator grants it, and it only moves her while the kernel has her commanded.
+held, and the conn holder has given no order" until the operator holding the conn orders it, and it
+only moves her while the kernel has her commanded.
 
 ## navigation_control/v1 (keelson#282)
 
@@ -69,11 +70,18 @@ then back on track within 5 m after `track{}`.
   `navigation_process` reads `command_request`, flow `an_operator_takes_the_conn_back`, an
   invariant), merged up into #308 and #320. This process implements it as
   `conduct.yield_on_request`.
-- [ ] Mismatch with #282: the protocol says the process drops to `MODE_READY` once another station
-  holds the conn (`another_station_takes_the_conn`, and now `an_operator_takes_the_conn_back`).
-  This process reports `MODE_FALLBACK`: the neutral burst on a lost lease, which is why pulling the
-  lease stops her. Decide which is right: FALLBACK as the transition and READY as the settled state,
-  or a protocol change. Found 2026-09-28 writing the rule.
+- [x] **The operator keeps the conn; this process carries out the order** (Ted, 2026-09-29).
+  `Gates.directed`: an order (`load_route` / `set_guidance_order`) from the live conn holder's
+  token, not this process and not another navigation process, gets her UNDERWAY with
+  `conn_held=false` ("carrying out the order of ted@roc1"). It survives a handover between
+  operators, stands down to FALLBACK on the holder's lease lapsing, a station taking the helm or
+  the voyage changing, and only a new order re-arms it. No COLREG auto-accept under an operator's
+  conn. keelson#282's text says the same (`navigation_conduct.yaml`, local commit on
+  `feat/navigation-control-interface`, not pushed). Slipway acceptance: STBD 25 m held at 22.9 ..
+  24.0 m with the lease never the navigator's; the lease left to lapse is FALLBACK and she stops.
+- [x] Mismatch with #282 on READY vs FALLBACK when the conn goes elsewhere: resolved with the text
+  change above -- the protocol now says the process stands down to FALLBACK (neutral burst, then
+  silence), which is what this process does.
 - [ ] ⬆ Blocked: the experimental pin names a tree of unmerged PRs (#282, #308 stacked on it, #320
   stacked on #308, #322 stacked on #320, #324 stacked on #322, #316).
 - [ ] keelson `NavigationDecision.Kind` has no settings kind, so a `set_settings` change is logged
@@ -93,7 +101,7 @@ then back on track within 5 m after `track{}`.
   (`test_riders.py` fails on exactly that, before this work too). Retiring the four riders moves
   encounter and advice keys and the disposition input, so it is its own change.
 
-- [ ] **Live run on the RISE bus**: the deployed navigator is ready for it (guidance on, autopilot gone, mapping free). Load Slipway `alpha-navigation` (or set alpha commanded), take the conn in Crowsnest, load her route, hand the conn to navigation/0, then try a go-to. Needs a person: it commands a vessel on the shared router
+- [ ] **Live run on the RISE bus**: the deployed navigator is ready for it (guidance on, autopilot gone, mapping free). Load Slipway `alpha-navigation` (or set alpha commanded), take the conn in Crowsnest and KEEP it, load her route and order a track offset / go-to through navigation/0 (Crowsnest's orders-via-navigator change, plan §3). Needs a person: it commands a vessel on the shared router
 - [ ] Slipway capability probes take a single-chunk `source_id` (`scenario.schema.json`: `^[a-z0-9][a-z0-9_-]*$`), so `alpha-navigation` cannot require the processor before the clock moves the way `alpha-autopilot` requires its autopilot. Ask Slipway to accept keelson's multi-chunk source ids
 - [ ] Add `NavigationSetpoint` and `NavigationDecision` to RISE-Maritime/keelson#260 (drafts in `docs/upstream/`, text in `docs/UPSTREAM-ASKS.md`). Needs a person: it pushes to GitHub
 - [ ] Speed policy: no UKC slow-down (no depth input is read yet) and no ETA hold

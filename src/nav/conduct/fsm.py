@@ -7,8 +7,13 @@ mode for that tick. Two rules carry the safety case:
 - Leaving FALLBACK needs a conn grant with a token other than the one held when it fell back, and
   not one this process issued itself. Pulling the lease must stop the vessel, so a processor that
   may take a free conn must not simply take it back.
-- UNDERWAY is entered only with a live conn, a driving authority level, fresh own-ship inputs and a
-  vehicle_control mapping that is free or already ours.
+- UNDERWAY is entered only with a live conn -- this process's own, or an operator's who has ordered
+  it (``directed``) -- a driving authority level, fresh own-ship inputs and a vehicle_control
+  mapping that is free or already ours.
+- Under an operator's conn it carries out that holder's order and nothing else (keelson
+  navigation_conduct, 2026-09-29): the operator keeps the conn and the responsibility. Leaving
+  FALLBACK then needs a new order from the live conn holder (``order_serial`` moved on), so a
+  lapsed lease or a station taking the helm stops her until someone orders her again.
 """
 
 from __future__ import annotations
@@ -36,6 +41,12 @@ class Gates:
     # control.orders.Kind value: track | course_over_ground_deg | heading_deg | hold | go_to
     order: str = "track"
     station_held: bool = False  # a point order holds on its point: go_to arrived, loiter drifting
+    # Carrying out the live conn holder's order under that holder's conn (not this process's):
+    # an operator holds the lease and has ordered it since it last stood down.
+    directed: bool = False
+    directed_by: str = ""  # the live holder whose order is carried out, e.g. "ted@roc1"
+    order_serial: int = 0  # counts orders from a conn holder, so a new one can be recognised
+    conn_holder: str | None = None  # controller_id of the live lease, whoever holds it
 
 
 @dataclass(frozen=True)
@@ -68,13 +79,23 @@ class Conduct:
         self.sub_mode = SubMode.UNSPECIFIED
         self.reason = "not started"
         self._fallback_token: str | None = None
+        self._fallback_serial = 0
         self._ended_route: str | None = None
+        self._under_order = False  # UNDERWAY on the holder's order, not on a conn of its own
+
+    @property
+    def under_order(self) -> bool:
+        """The last UNDERWAY was on the conn holder's order, not on a conn of its own."""
+        return self._under_order
 
     def step(self, g: Gates) -> Step:
         before, before_sub = self.mode, self.sub_mode
         mode, sub, reason = self._next(g)
         if mode is Mode.FALLBACK and before is not Mode.FALLBACK:
             self._fallback_token = g.conn_token
+            self._fallback_serial = g.order_serial
+        if mode is Mode.UNDERWAY:
+            self._under_order = not g.conn_held
         if mode is Mode.ENDED and before is not Mode.ENDED:
             self._ended_route = g.route
         self.mode, self.sub_mode, self.reason = mode, sub, reason
@@ -92,23 +113,27 @@ class Conduct:
             blocker = self._blocker(g)
             if blocker is not None:
                 return Mode.READY, none, f"{g.route_reason}; not underway: {blocker}"
-            return Mode.UNDERWAY, sub, f"{g.route_reason}; conn held, {g.authority_note}"
+            return Mode.UNDERWAY, sub, f"{g.route_reason}; {_acting(g)}"
         if m is Mode.UNDERWAY:
             loss = self._loss(g)
             if loss is not None:
                 return Mode.FALLBACK, none, loss
             if g.arrived:
                 return Mode.ARRIVED, none, "final waypoint reached"
-            return Mode.UNDERWAY, sub, f"{g.route_reason}; conn held, {g.authority_note}"
+            return Mode.UNDERWAY, sub, f"{g.route_reason}; {_acting(g)}"
         if m is Mode.FALLBACK:
             if g.conn_held and g.conn_token != self._fallback_token and not g.conn_self_issued:
                 return Mode.READY, none, "conn granted again after fallback"
+            if g.directed and not g.conn_held and g.order_serial != self._fallback_serial:
+                return Mode.READY, none, f"a new order from the conn holder {g.directed_by}"
             if g.route is None and not g.conn_held:
                 return Mode.IDLE, none, "fallback cleared: no route selected and conn not held"
             return Mode.FALLBACK, none, self.reason
         if m is Mode.ARRIVED:
             if not g.conn_held:
-                return Mode.ENDED, none, "arrived; conn released"
+                # Under an operator's conn there is no conn of its own to release: it ends at once.
+                done = "the conn holder's order is carried out" if self._under_order else None
+                return Mode.ENDED, none, f"arrived; {done or 'conn released'}"
             return Mode.ARRIVED, none, "final waypoint reached; releasing the conn"
         if g.route != self._ended_route:
             return Mode.IDLE, none, "voyage ended; the route selection changed"
@@ -121,25 +146,37 @@ class Conduct:
         if not g.ownship_fresh:
             return f"own-ship inputs missing or stale: {', '.join(g.missing_inputs)}"
         if g.helm == "other":
-            return "the vehicle_control mapping belongs to another controller"
+            return "a station has the helm (the vehicle_control mapping is another controller's)"
         if g.helm == "unknown":
             return "no vehicle_control/v1 responder has answered"
-        if not g.conn_held:
-            return "conn not held"
+        if not (g.conn_held or g.directed):
+            return "conn not held, and the conn holder has given no order"
         if g.arrived:
             return "already at the final waypoint"
         return None
 
-    @staticmethod
-    def _loss(g: Gates) -> str | None:
+    def _loss(self, g: Gates) -> str | None:
         if g.route is None:
             return f"route no longer selected: {g.route_reason}"
-        if not g.conn_held:
-            return "conn lost"
+        if not (g.conn_held or g.directed):
+            if g.helm == "other":
+                return "a station took the helm (the vehicle_control mapping)"
+            if not self._under_order:
+                return "conn lost"
+            if g.conn_holder is None:
+                return "the conn holder's lease lapsed"
+            return f"the conn is now {g.conn_holder}'s, which has given no order"
         if not g.may_drive:
             return f"authority no longer allows driving: {g.authority_note}"
         if not g.ownship_fresh:
             return f"own-ship inputs missing or stale: {', '.join(g.missing_inputs)}"
         if g.helm == "other":
-            return "another controller took the vehicle_control mapping"
+            return "a station took the helm (the vehicle_control mapping)"
         return None
+
+
+def _acting(g: Gates) -> str:
+    """Whose conn it steers under: its own (full automation), or the holder's order."""
+    if g.conn_held:
+        return f"conn held, {g.authority_note}"
+    return f"carrying out the order of {g.directed_by}, {g.authority_note}"

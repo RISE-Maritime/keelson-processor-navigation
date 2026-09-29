@@ -105,6 +105,9 @@ class Outcome:
     publish_latest: list[tuple[str, dict]] = field(default_factory=list)  # (route_id, route dict)
     decisions: list[tuple[str, str]] = field(default_factory=list)  # (kind, summary)
     settings: dict | None = None  # set_settings: the changes to apply, validated whole
+    # The order came from the live conn holder, presenting its token, while this process does not
+    # hold the conn: the process carries it out under that holder's conn (navigation_conduct).
+    from_holder: bool = False
 
     @property
     def accepted(self) -> bool:
@@ -144,6 +147,12 @@ class Controller:
             return f"{controller} holds no conn and is not a controller this process permits"
         return f"{controller} does not hold the conn"
 
+    @staticmethod
+    def _from_holder(request: dict, ctx: Context) -> bool:
+        """The caller presented the live lease's token and that lease is not this process's."""
+        token = (request.get("caller") or {}).get("authority_token")
+        return bool(token) and token == ctx.holder_token and not ctx.conn_held
+
     # -- procedures ----------------------------------------------------------------------------
 
     def decide(self, pending: Pending, ctx: Context) -> Outcome:
@@ -157,10 +166,14 @@ class Controller:
         if denied is not None:
             return Outcome(DENIED, denied)
         controller = req["caller"]["controller_id"]
-        if pending.procedure == "load_route":
-            return self._load_route(pending, ctx, controller)
-        if pending.procedure == "set_guidance_order":
-            return self._set_order(req, ctx, controller)
+        if pending.procedure in ("load_route", "set_guidance_order"):
+            outcome = (
+                self._load_route(pending, ctx, controller)
+                if pending.procedure == "load_route"
+                else self._set_order(req, ctx, controller)
+            )
+            outcome.from_holder = outcome.accepted and self._from_holder(req, ctx)
+            return outcome
         if pending.procedure == "set_settings":
             return self._set_settings(req, ctx, controller)
         return self._set_status(req, ctx, controller)

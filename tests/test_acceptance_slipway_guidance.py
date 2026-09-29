@@ -70,7 +70,7 @@ def nav_conf() -> dict:
 
 
 class Harbour:
-    def __init__(self):
+    def __init__(self, grant: bool = True):
         self.scenario = load_scenario(SCENARIO, vessel_dir=SLIPWAY / "vessels")
         self.rt = KernelRuntime(self.scenario, run_id="nav-acceptance", sim_epoch_ns=EPOCH)
         self.rt.prime()
@@ -87,7 +87,28 @@ class Harbour:
         self.history: list[tuple] = []
         self.posted = 0
         self.grant = "grant-1"
-        self._hand_over(conf)
+        self.operator_heartbeat = False
+        if grant:
+            self._hand_over(conf)
+        else:
+            self._operator_keeps_the_conn()
+
+    def _operator_keeps_the_conn(self) -> None:
+        """The operator holds the conn, heartbeats it, and loads her route with its token. No
+        grant: the process carries the operator's order out under the operator's conn."""
+        self.grant = "roc-lease"
+        self.operator_heartbeat = True
+        self._heartbeat(EPOCH)
+        loaded = self.call(
+            "load_route",
+            {"caller": OPERATOR, "route_ref": {"route_id": ALPHA, "route_edition_number": 1}},
+        )
+        assert loaded["result"] == "COMMAND_RESULT_ACCEPTED", loaded["detail"]
+
+    def _heartbeat(self, now: int) -> None:
+        self.p.world.put_lease(
+            {"controller_id": "roc@ROC-1", "token": "roc-lease", "lease_ttl_seconds": 30}, now
+        )
 
     def _hand_over(self, conf: dict) -> None:
         """The operator holds the conn, loads her route, then grants the conn to the processor.
@@ -139,6 +160,8 @@ class Harbour:
         now = self.rt.sim_timestamp_ns(world)
         vessel = world.vessel(ALPHA)
         values = operational_values(vessel, self.cfg, self.scenario.conditions)
+        if self.operator_heartbeat and (now - EPOCH) % (10 * S) < self.scenario.dt_ns:
+            self._heartbeat(now)  # Crowsnest heartbeats every 10 s
         if processor_alive:
             w = self.p.world
             w.inputs.put(
@@ -420,3 +443,35 @@ def test_a_starboard_offset_is_held_and_rejoin_returns_to_the_centreline():
     rejoined = [abs(row[4].xtd_m) for row in h.history[-200:] if row[4] is not None]
     print(f"rejoined: worst |xtd| over the last 20 s {max(rejoined):.1f} m")
     assert max(rejoined) < 5.0
+
+
+def test_the_operator_keeps_the_conn_and_she_holds_a_starboard_offset_on_the_order():
+    """Ted, 2026-09-29: the operator keeps the conn; the navigator carries the order out. She
+    sails the operator's track order STBD 25 m without the lease ever being the navigator's, and
+    the operator's lease lapsing stops her (FALLBACK)."""
+    h = Harbour(grant=False)
+    assert h.run_until(Mode.UNDERWAY, 2.0) < 1.0
+    assert "carrying out the order of roc@ROC-1" in h.p.conduct.reason
+    h.run(60.0)
+    r = h.order({"track": {"cross_track_offset_m": 25.0}})
+    assert r["result"] == "COMMAND_RESULT_ACCEPTED", r["detail"]
+    assert r["state"]["mode"] == "MODE_UNDERWAY" and not r["state"].get("conn_held", False)
+    h.run(90.0)
+    held = [row[4].xtd_m for row in h.history[-200:] if row[4] is not None]
+    print(f"offset 25 m under the operator's conn: xtd {min(held):.1f} .. {max(held):.1f} m")
+    assert all(20.0 <= x <= 30.0 for x in held), (min(held), max(held))
+    assert h.p.lease.token is None and not h.p.conn_held
+    assert h.p.lease_book.last.controller_id == "roc@ROC-1"
+    assert h.history[-1][3] > 5.0, "not making way on the order"
+
+    h.operator_heartbeat = False  # the operator's station goes quiet
+    quiet = h.history[-1][0]
+    h.run(45.0)
+    after = [r for r in h.history if r[0] > quiet]
+    lapsed = next(r[0] for r in after if r[1] is Mode.FALLBACK)
+    print(f"FALLBACK {(lapsed - quiet) / S:.1f} s after the last heartbeat")
+    assert "the conn holder's lease lapsed" in h.p.conduct.reason
+    assert h.history[-1][3] == 0.0, "still making way after the operator's lease lapsed"
+    assert h.p.conduct.mode is Mode.FALLBACK
+    assert h.p.lease.token is None
+    assert h.mapping == {}, "the operator's helm is still mapped to guidance"

@@ -93,6 +93,8 @@ class Rig:
         out = self.p.tick(self.now)
         if self.p.actuation.mapping == "install":
             self.mapping = wanted_mapping(SRC, 1.0)
+        elif self.p.actuation.mapping == "release" and self.mapping == wanted_mapping(SRC, 1.0):
+            self.mapping = {}
         self.now += S // 10
         self.out += out
         return out
@@ -769,3 +771,113 @@ def test_an_offset_steers_for_the_parallel_line(control_conf):
     offset = rig.published("navigation_setpoint")[-1].payload["steering"]["course_over_ground_deg"]
     # A starboard offset from the centreline: she comes right of the leg's course.
     assert 0.0 < ((offset - on_track + 540.0) % 360.0 - 180.0) < 90.0
+
+
+# -- the operator keeps the conn; the process carries out the order (navigation_conduct) ------
+
+OPERATOR = "ted@roc1"
+
+
+def _directed(conf, order=None) -> Rig:
+    """An operator holds the conn and loads the route with its token. No grant: it stays theirs."""
+    rig = Rig(conf)
+    rig.lease(OPERATOR, "op-1")
+    extra = {"initial_order": order} if order is not None else {}
+    p = rig.call("load_route", load(caller=caller(OPERATOR, token="op-1"), **extra))
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    return rig
+
+
+def test_an_order_from_the_conn_holder_is_carried_out_under_the_holders_conn(control_conf):
+    rig = _directed(control_conf, {"heading_deg": 90.0})
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+    assert "carrying out the order of ted@roc1" in rig.p.conduct.reason
+    assert rig.p.lease.token is None and not rig.p.conn_held
+    assert not rig.published("command_authority"), "the conn is the operator's, never taken"
+    state = rig.published("navigation_state")[-1].payload
+    assert state["mode"] == "MODE_UNDERWAY" and state["conn_held"] is False
+    assert rig.p.actuation.axes is not None and rig.p.actuation.axes[0] > 0  # turning to 090
+
+
+def test_a_voyage_the_holder_did_not_order_does_not_drive(control_conf):
+    """A voyage selected (here published by a station, not loaded by the holder) carries the
+    default TRACK, and that is not an order from the conn holder."""
+    rig = Rig(control_conf)
+    rig.lease(OPERATOR, "op-1")
+    from nav.world.route import RouteRef, VoyagePlan
+
+    rig.p.world.put_voyage(
+        VoyagePlan("voy-x", "VOYAGE_STATUS_ACTIVE", RouteRef("r1", 1)), {"voyage_id": "voy-x"}
+    )
+    rig.run(1.0)
+    assert rig.p.selection.voyage.voyage_id == "voy-x"
+    assert rig.p.conduct.mode is Mode.READY, rig.p.conduct.reason
+    assert "no order" in rig.p.conduct.reason
+    p = rig.call(
+        "set_guidance_order", {"caller": caller(OPERATOR, token="op-1"), "order": {"track": {}}}
+    )
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED"
+    rig.run(0.5)
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+
+
+def test_a_handover_between_operators_keeps_the_order_in_force(control_conf):
+    rig = _directed(control_conf)
+    rig.lease("anna@roc2", "op-2")
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.UNDERWAY
+    assert "carrying out the order of anna@roc2" in rig.p.conduct.reason
+    summaries = [o.payload.get("summary", "") for o in rig.published("navigation_decision")]
+    assert any("conn passed from ted@roc1 to anna@roc2" in s for s in summaries), summaries
+
+
+def test_the_holders_lease_lapsing_stops_her_until_a_new_order(control_conf):
+    rig = _directed(control_conf)
+    rig.p.world.put_lease({"token": "op-1", "released": True}, rig.now)
+    rig.run(0.5)
+    assert rig.p.conduct.mode is Mode.FALLBACK
+    assert "the conn holder's lease lapsed" in rig.p.conduct.reason
+    # The conn comes back to an operator: nothing moves until that holder orders her again.
+    rig.lease(OPERATOR, "op-3")
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.FALLBACK
+    p = rig.call(
+        "set_guidance_order", {"caller": caller(OPERATOR, token="op-3"), "order": {"track": {}}}
+    )
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED"
+    rig.run(0.5)
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+
+
+def test_a_lease_left_to_lapse_by_ttl_stops_her_and_frees_the_helm(control_conf):
+    rig = _directed(control_conf)
+    assert rig.mapping, "guidance never installed its mapping"
+    rig.run(31.0)  # no heartbeat: 30 s ttl on this receiver's clock
+    assert rig.p.conduct.mode is Mode.FALLBACK
+    assert "lease lapsed" in rig.p.conduct.reason
+    rig.run(5.0)  # past the neutral burst
+    assert rig.mapping == {}, "the operator's helm is still mapped to guidance"
+
+
+def test_a_station_taking_the_helm_stands_her_down(control_conf):
+    rig = _directed(control_conf)
+    rig.mapping = wanted_mapping("roc/helm", 1.0)
+    rig.run(0.5)
+    assert rig.p.conduct.mode is Mode.FALLBACK
+    assert "a station took the helm" in rig.p.conduct.reason
+    rig.mapping = {}  # the station lets go: still no order, so she stays stood down
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.FALLBACK
+
+
+def test_no_advice_is_auto_accepted_under_an_operators_conn(control_conf):
+    rig = _directed(control_conf)
+    assert rig.p.conduct.mode is Mode.UNDERWAY
+
+    class Advisor:
+        def undecided_advice(self, now_ns):
+            raise AssertionError("looked for advice to accept under an operator's conn")
+
+    rig.p.advisor = Advisor()
+    assert rig.p._auto_accept(rig.now) == []
