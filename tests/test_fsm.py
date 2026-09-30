@@ -249,3 +249,37 @@ def test_a_handover_between_operators_keeps_her_underway_under_the_new_holder():
     step = c.step(replace(DIRECTED, directed_by="anna@roc2", conn_holder="anna@roc2"))
     assert step.mode is Mode.UNDERWAY and not step.changed
     assert "carrying out the order of anna@roc2" in step.reason
+
+
+# A finished route ends only a TRACK order: a course, heading, hold, go_to or loiter order is not
+# about the route's end (live on slipway-usv-alpha: orders blocked as "already at the final
+# waypoint").
+OFF_TRACK = ("course_over_ground_deg", "heading_deg", "hold", "go_to", "loiter")
+
+
+@pytest.mark.parametrize("order", OFF_TRACK)
+def test_a_finished_route_does_not_block_an_off_track_order(order):
+    c = machine_in(Mode.READY)
+    step = c.step(replace(GOOD, arrived=True, order=order))
+    assert step.mode is Mode.UNDERWAY, step.reason
+
+
+def test_a_finished_route_still_blocks_a_track_order():
+    c = machine_in(Mode.READY)
+    step = c.step(replace(GOOD, arrived=True, order="track"))
+    assert step.mode is Mode.READY and "already at the final waypoint" in step.reason
+
+
+@pytest.mark.parametrize("order", OFF_TRACK)
+def test_underway_on_an_off_track_order_stays_underway_past_the_routes_end(order):
+    c = Conduct()
+    c.step(replace(GOOD, order=order))
+    assert c.mode is Mode.UNDERWAY
+    step = c.step(replace(GOOD, arrived=True, order=order))
+    assert step.mode is Mode.UNDERWAY and not step.changed
+
+
+def test_directed_course_order_past_the_routes_end_goes_underway():
+    c = Conduct()
+    step = c.step(replace(DIRECTED, arrived=True, order="course_over_ground_deg"))
+    assert step.mode is Mode.UNDERWAY, step.reason

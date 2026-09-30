@@ -440,7 +440,14 @@ class Processor:
         accepted = self.advisor.accepted_advice(now_ns) if self.advisor is not None else None
 
         progress = self.monitor.status.progress if self.monitor is not None else None
-        arrived = track.arrived if track is not None else bool(progress and progress.arrived)
+        if track is not None:
+            arrived = track.arrived
+        elif self.guidance is not None:
+            # No state this tick (own-ship missing): keep guidance's own latch, which a rejoin
+            # cleared. The monitor's progress latches separately and would outlive the rejoin.
+            arrived = self.guidance.track.arrived
+        else:
+            arrived = bool(progress and progress.arrived)
         self.conn_held = self.lease.held(self.lease_book, now_ns)
         holder = self.lease_book.holder(now_ns)
         self.directed = self._directed(now_ns, holder)

@@ -159,6 +159,11 @@ class TrackGuide:
         intercept = max(-self.cfg.max_intercept_deg, min(self.cfg.max_intercept_deg, intercept))
         return (state.leg_bearing_deg - intercept) % 360.0
 
+    @property
+    def arrived(self) -> bool:
+        """The arrival latch as last followed; cleared by ``reset``/``rejoin``."""
+        return self._arrived
+
     def rejoin(self, plan: RoutePlan | None, waypoint_id: str | None) -> None:
         """Return to the track after an off-track order. At ``waypoint_id``: steer for it, on the
         leg that arrives there (the first leg for the first waypoint). Without one: forget the leg,

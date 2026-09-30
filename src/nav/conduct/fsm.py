@@ -58,6 +58,13 @@ class Step:
     before: Mode
 
 
+def _route_arrived(g: Gates) -> bool:
+    """Arrival at the route's final waypoint ends only a TRACK order. A course, heading, hold,
+    go_to or loiter order is not about the route's end, and a finished route must neither block
+    it nor end it; a point order's own arrival is ``station_held``."""
+    return g.arrived and g.order == "track"
+
+
 def _sub_mode(g: Gates) -> SubMode:
     """Accepted advice outranks the order; the order says the rest (keelson.GuidanceOrder)."""
     if g.avoiding:
@@ -118,7 +125,7 @@ class Conduct:
             loss = self._loss(g)
             if loss is not None:
                 return Mode.FALLBACK, none, loss
-            if g.arrived:
+            if _route_arrived(g):
                 return Mode.ARRIVED, none, "final waypoint reached"
             return Mode.UNDERWAY, sub, f"{g.route_reason}; {_acting(g)}"
         if m is Mode.FALLBACK:
@@ -151,7 +158,7 @@ class Conduct:
             return "no vehicle_control/v1 responder has answered"
         if not (g.conn_held or g.directed):
             return "conn not held, and the conn holder has given no order"
-        if g.arrived:
+        if _route_arrived(g):
             return "already at the final waypoint"
         return None
 

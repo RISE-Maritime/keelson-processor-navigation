@@ -50,6 +50,16 @@ def test_arrives_inside_the_capture_radius_of_the_final_waypoint():
     assert state.arrived and state.to_waypoint_id == "wp3"
 
 
+def test_a_rejoin_clears_the_arrival_latch():
+    plan = square_route(radius=30.0)
+    guide = TrackGuide()
+    last = plan.waypoints[-1]
+    guide.follow(plan, Own(*g.destination(last.lat, last.lon, 0.0, 20.0), heading_deg=180.0))
+    assert guide.arrived
+    guide.rejoin(plan, plan.waypoints[1].id)
+    assert not guide.arrived
+
+
 def test_line_of_sight_turns_back_towards_the_track_and_caps_the_intercept():
     plan = square_route()
     guide = TrackGuide()
