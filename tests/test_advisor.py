@@ -5,8 +5,10 @@ from itertools import count
 
 import pytest
 
+from nav.colreg import advisor as advisor_mod
 from nav.colreg.advisor import SUBJECTS, Advisor, AdvisorConfig, OwnState
 from nav.colreg.records import DispositionRecord
+from nav.colreg.synthesize import Manoeuvre, Prediction
 from nav.traffic.cpa import Kinematics, geometry
 from nav.traffic.monitor import Assessed
 from nav.world.latch import Sample
@@ -223,3 +225,142 @@ def test_danger_raises_a_collision_alarm_and_clears_it_on_close():
     cleared = {al.payload["identifier"]: al.payload for al in by("alarm", out)}
     assert set(cleared) == set(alarms)
     assert all(c["expiration_time_utc"] == c["timestamp"] for c in cleared.values())
+
+
+# -- hysteresis: one advice per manoeuvre, not per tick ------------------------------------------
+# Measured on slipway-usv-alpha, 19-29 Sept 2026: 32,761 advices, 31,082 of them superseded within
+# seconds, the synthesis alternating STOP / SPEED_CHANGE / speed +-1.5 kn every tick.
+
+CLEARS = Prediction(2000.0, 2000.0, (), 2000.0, 2000.0)
+SHORT = Prediction(50.0, 50.0, (), 50.0, 50.0)
+
+
+def manoeuvre(kind, sog, course=0.0, satisfied=True):
+    return Manoeuvre(kind, course, sog, 0.0, CLEARS if satisfied else SHORT, satisfied)
+
+
+def scripted(monkeypatch, proposals, held_clears=True):
+    """The synthesis proposes the next of ``proposals`` each call; a held manoeuvre re-judged
+    against the traffic clears (or not) as ``held_clears`` says."""
+    it = iter(proposals)
+    monkeypatch.setattr(advisor_mod, "synthesize", lambda *a, **k: next(it))
+    clears = held_clears if callable(held_clears) else (lambda: held_clears)
+    monkeypatch.setattr(
+        advisor_mod, "assess", lambda *a, **k: (CLEARS, True) if clears() else (SHORT, False)
+    )
+
+
+def dispositions(emits):
+    return [e.payload for e in emits if e.subject == "advice_disposition"]
+
+
+def test_a_flip_flopping_synthesis_yields_one_advice_restated(monkeypatch):
+    cycle = [
+        manoeuvre("KIND_STOP", 0.0),
+        manoeuvre("KIND_SPEED_CHANGE", 0.5),
+        manoeuvre("KIND_SPEED_CHANGE", 2.0),
+        manoeuvre("KIND_SPEED_CHANGE", 3.5),
+        manoeuvre("KIND_SPEED_CHANGE", 2.0),
+    ]
+    scripted(monkeypatch, cycle * 20)
+    o = own()
+    a = advisor()
+    out = []
+    for t in range(61):  # every second for a minute, past the 30 s hold
+        out += a.step(t * S, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    advice = by("navigation_advice", out)
+    assert {e.payload["advice_id"] for e in advice} == {"id2"}
+    assert len(advice) == 13  # offered, then restated every advice_restate_s
+    assert {e.payload["kind"] for e in advice} == {"KIND_STOP"}  # as offered, never rewritten
+    assert dispositions(out) == []
+
+
+def test_stop_and_a_low_speed_change_are_the_same_advice(monkeypatch):
+    scripted(
+        monkeypatch,
+        [manoeuvre("KIND_STOP", 0.0), manoeuvre("KIND_SPEED_CHANGE", 0.5)],
+        held_clears=False,  # past the hold, only "the same advice" keeps it
+    )
+    o = own()
+    a = advisor()
+    a.step(0, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    out = a.step(40 * S, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    (again,) = by("navigation_advice", out)
+    assert again.payload["advice_id"] == "id2" and dispositions(out) == []
+
+
+def test_escalation_to_danger_supersedes_at_once(monkeypatch):
+    scripted(
+        monkeypatch,
+        [manoeuvre("KIND_SPEED_CHANGE", 5.0), manoeuvre("KIND_COURSE_ALTERATION", 10.0, 60.0)],
+    )
+    o = own()
+    a = advisor()
+    first = a.step(0, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    assert by("encounter", first)[0].payload["risk"] == "RISK_RISK"
+    # Two seconds later, well inside the hold: the same target, now a collision 2.4 min out.
+    out = a.step(2 * S, o, target("mmsi_1", 0.4, 0.4, 270.0, 10.0, o), COASTAL, None)
+    assert by("encounter", out)[0].payload["risk"] == "RISK_DANGER"
+    (disp,) = dispositions(out)
+    (new,) = by("navigation_advice", out)
+    assert (disp["advice_id"], disp["state"], disp["superseded_by"]) == (
+        "id2",
+        "STATE_SUPERSEDED",
+        new.payload["advice_id"],
+    )
+    assert new.payload["kind"] == "KIND_COURSE_ALTERATION"
+
+
+def test_a_new_encounter_supersedes_at_once(monkeypatch):
+    scripted(
+        monkeypatch, [manoeuvre("KIND_SPEED_CHANGE", 5.0), manoeuvre("KIND_SPEED_CHANGE", 2.5)]
+    )
+    o = own()
+    a = advisor()
+    a.step(0, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    both = target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o) | target(
+        "mmsi_2", -1.0, 1.0, 90.0, 10.0, o, name="CHARLIE", heading=90.0
+    )
+    out = a.step(2 * S, o, both, COASTAL, None)
+    (disp,) = dispositions(out)
+    (new,) = by("navigation_advice", out)
+    assert disp["state"] == "STATE_SUPERSEDED" and len(new.payload["encounter_ids"]) == 2
+
+
+def test_held_advice_that_stops_clearing_is_superseded_inside_the_hold(monkeypatch):
+    scripted(
+        monkeypatch,
+        [manoeuvre("KIND_SPEED_CHANGE", 5.0), manoeuvre("KIND_COURSE_ALTERATION", 10.0, 60.0)],
+        held_clears=False,
+    )
+    o = own()
+    a = advisor()
+    a.step(0, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    out = a.step(2 * S, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    assert [d["state"] for d in dispositions(out)] == ["STATE_SUPERSEDED"]
+
+
+def test_after_the_hold_advice_that_still_clears_is_kept(monkeypatch):
+    # The synthesis proposes a fresh alteration from the present course each tick: once the
+    # vessel has turned it proposes turning again. Advice that still clears is not replaced.
+    proposals = [manoeuvre("KIND_COURSE_ALTERATION", 10.0, 30.0)]
+    proposals += [manoeuvre("KIND_COURSE_ALTERATION", 10.0, 60.0)] * 10
+    scripted(monkeypatch, proposals)
+    o = own()
+    a = advisor()
+    out = []
+    for t in (0, 10, 20, 31, 40, 50):
+        out += a.step(t * S, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    assert {e.payload["advice_id"] for e in by("navigation_advice", out)} == {"id2"}
+    assert dispositions(out) == []
+
+
+def test_closing_is_not_held(monkeypatch):
+    scripted(monkeypatch, [manoeuvre("KIND_SPEED_CHANGE", 5.0)])
+    o = own()
+    a = advisor()
+    a.step(0, o, target("mmsi_1", 1.0, 1.0, 270.0, 10.0, o), COASTAL, None)
+    out = a.step(S, o, target("mmsi_1", -1.0, 0.5, 270.0, 10.0, o), COASTAL, None)
+    (disp,) = dispositions(out)
+    (resume,) = by("navigation_advice", out)
+    assert disp["state"] == "STATE_SUPERSEDED" and resume.payload["kind"] == "KIND_RESUME_TRACK"

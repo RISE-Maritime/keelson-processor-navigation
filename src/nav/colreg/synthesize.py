@@ -89,6 +89,32 @@ def predict(
     return Prediction(min_cpa, min_range, tuple(sorted(crosses)), min_subject, min_other)
 
 
+def assess(
+    own: Kinematics,
+    course_deg: float | None,
+    sog_knots: float | None,
+    targets: Mapping[str, Kinematics],
+    safe_passing_m: float,
+    no_cross_ahead: Iterable[str] = (),
+    cfg: SynthesisConfig | None = None,
+    subjects: Iterable[str] | None = None,
+    other_min_m: float | None = None,
+) -> tuple[Prediction, bool]:
+    """One manoeuvre judged exactly as ``synthesize`` judges its candidates: its prediction, and
+    whether it clears the subjects by ``safe_passing_m``, every other target by ``other_min_m``,
+    and crosses ahead of no guarded target. The advisor uses it to ask whether advice it already
+    holds still works against the traffic as it is now."""
+    cfg = cfg or SynthesisConfig()
+    other_limit = safe_passing_m if other_min_m is None else other_min_m
+    p = predict(own, course_deg, sog_knots, targets, tuple(no_cross_ahead), cfg.horizon_s, subjects)
+    ok = (
+        p.min_cpa_subject_m >= safe_passing_m
+        and p.min_cpa_other_m >= other_limit
+        and not p.crosses_ahead_of
+    )
+    return p, ok
+
+
 def _course(base: float, alteration: float) -> float:
     return (base + alteration) % 360.0
 
@@ -129,11 +155,8 @@ def synthesize(
 
     def attempt(kind, alteration, sog):
         course = _course(base_course, alteration)
-        p = predict(own, course, sog, targets, guarded, cfg.horizon_s, subject_ids)
-        ok = (
-            p.min_cpa_subject_m >= safe_passing_m
-            and p.min_cpa_other_m >= other_limit
-            and not p.crosses_ahead_of
+        p, ok = assess(
+            own, course, sog, targets, safe_passing_m, guarded, cfg, subject_ids, other_limit
         )
         m = Manoeuvre(kind, course, sog, alteration, p, ok)
         tried.append(m)

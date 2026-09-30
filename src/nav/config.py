@@ -76,6 +76,7 @@ COLREG_DEFAULTS = {
     "clear_margin": 1.2,
     "advice_validity_s": 30.0,
     "advice_restate_s": 5.0,
+    "advice_min_hold_s": 30.0,  # keep offered advice this long unless the situation escalates
     "restricted_visibility_m": 1852.0,
     "min_alteration_deg": 30.0,
     "max_alteration_deg": 90.0,
@@ -479,6 +480,11 @@ def _validate_colreg(conf: dict) -> None:
     ):
         if not _positive(cr[key]):
             raise ConfigError(f"colreg.{key} must be a positive number")
+    hold = cr["advice_min_hold_s"]
+    if not (_positive(hold) or (isinstance(hold, (int, float)) and hold == 0)) or isinstance(
+        hold, bool
+    ):
+        raise ConfigError("colreg.advice_min_hold_s must be a number of seconds, 0 or more")
     if not isinstance(cr["clear_margin"], (int, float)) or cr["clear_margin"] < 1:
         raise ConfigError("colreg.clear_margin must be at least 1")
     if cr["advice_restate_s"] >= cr["advice_validity_s"]:

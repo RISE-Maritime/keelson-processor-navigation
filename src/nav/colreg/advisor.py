@@ -11,8 +11,8 @@ import base64
 import hashlib
 import json
 import uuid
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 
 from ..bus.codec import rfc3339
 from ..outputs import Emit
@@ -22,13 +22,15 @@ from ..traffic.monitor import Assessed
 from .classify import Role, Situation, Vessel, classify, relative_deg
 from .records import AdviceRecord, DispositionRecord, EncounterRecord, TargetRef
 from .risk import Risk, Thresholds, grade, thresholds_for
-from .synthesize import NOT_CONSIDERED, Manoeuvre, SynthesisConfig, synthesize
+from .synthesize import NOT_CONSIDERED, Manoeuvre, Prediction, SynthesisConfig, assess, synthesize
 
 POLICY_ID = "keelson-processor-navigation/colreg/v1"
 AVOIDING_KINDS = frozenset(
     {"KIND_COURSE_ALTERATION", "KIND_SPEED_CHANGE", "KIND_COURSE_AND_SPEED", "KIND_STOP"}
 )
 SUBJECTS = ("encounter", "navigation_advice", "advice_disposition", "alarm")
+# STOP is a speed change to 0 kn: "stop" and "slow to 0.5 kn" are the same advice.
+_FAMILY = {"KIND_STOP": "KIND_SPEED_CHANGE"}
 
 _SITUATION_WORDS = {
     Situation.OVERTAKING: "own ship overtaking",
@@ -53,6 +55,11 @@ class AdvisorConfig:
     clear_margin: float = 1.2
     advice_validity_s: float = 30.0
     advice_restate_s: float = 5.0
+    # Once offered, an avoiding advice is kept (restated under its advice_id) for at least this
+    # long unless the situation escalates. Without it the synthesis, re-run every tick against
+    # jittering kinematics, alternated STOP / SPEED_CHANGE / speed +-1.5 kn every 1-10 s on
+    # slipway-usv-alpha: 32,761 advices in ten days, 31,082 of them superseded.
+    advice_min_hold_s: float = 30.0
     same_course_tolerance_deg: float = 10.0
     same_speed_tolerance_knots: float = 1.0
     restricted_visibility_m: float = 1852.0
@@ -104,6 +111,14 @@ class _Advice:
     record: AdviceRecord
     last_restated_ns: int
     valid_to_ns: int
+    offered_ns: int = 0
+    manoeuvre: Manoeuvre | None = None  # what the record advises, as synthesised
+    worst: Risk = Risk.NONE  # the worst risk among its encounters when last evaluated
+
+
+# Judges a held manoeuvre's (course, speed) against the traffic now: (prediction, clears), with the
+# passing distances divided by the given relaxation (1: exactly as the synthesis judges).
+Recheck = Callable[..., tuple[Prediction, bool]]
 
 
 class Advisor:
@@ -321,6 +336,7 @@ class Advisor:
         no_role = {tid: e for tid, e in active.items() if e.role == Role.NONE}
         stand_on = {tid: e for tid, e in active.items() if e.role == Role.STAND_ON}
         ids = tuple(sorted(e.encounter_id for e in active.values()))
+        worst = max(e.risk for e in active.values())
         rules = tuple(dict.fromkeys(r for e in active.values() for r in e.rules))
 
         if give_way or no_role:
@@ -352,7 +368,26 @@ class Advisor:
                 th.danger_cpa_m,
             )
             return self._offer(
-                now_ns, token, voyage_id, m, ids, (*rules, "8"), kin, self._why(active, m, turns)
+                now_ns,
+                token,
+                voyage_id,
+                m,
+                ids,
+                (*rules, "8"),
+                kin,
+                lambda m: self._why(active, m, turns),
+                worst,
+                lambda course, sog, relax=1.0: assess(
+                    kin,
+                    course,
+                    sog,
+                    targets,
+                    th.cpa_m / relax,
+                    guarded,
+                    self.cfg.synthesis,
+                    subjects,
+                    th.danger_cpa_m / relax,
+                ),
             )
 
         # Only stand-on encounters.
@@ -377,14 +412,36 @@ class Advisor:
                 list(active),
                 th.danger_cpa_m,
             )
-            why = (
-                "Stand-on, but the give-way vessel is not taking action and the approach is close: "
-                "act to avoid collision under 17(a)(ii), not altering to port for a vessel "
-                "on the port side "
-                f"(17(c)). {self._describe(m)} {NOT_CONSIDERED}"
-            )
+
+            def why(m: Manoeuvre) -> str:
+                return (
+                    "Stand-on, but the give-way vessel is not taking action and the approach is "
+                    "close: act to avoid collision under 17(a)(ii), not altering to port for a "
+                    f"vessel on the port side (17(c)). {self._describe(m)} {NOT_CONSIDERED}"
+                )
+
+            subjects = list(active)
             return self._offer(
-                now_ns, token, voyage_id, m, ids, (*rules, "17(a)(ii)", "17(c)"), kin, why
+                now_ns,
+                token,
+                voyage_id,
+                m,
+                ids,
+                (*rules, "17(a)(ii)", "17(c)"),
+                kin,
+                why,
+                worst,
+                lambda course, sog, relax=1.0: assess(
+                    kin,
+                    course,
+                    sog,
+                    targets,
+                    th.cpa_m / relax,
+                    (),
+                    self.cfg.synthesis,
+                    subjects,
+                    th.danger_cpa_m / relax,
+                ),
             )
         maintain = Manoeuvre(
             "KIND_MAINTAIN", kin.cog_deg, kin.sog_knots, 0.0, _no_prediction(), True
@@ -393,23 +450,29 @@ class Advisor:
             "Stand-on vessel: keep course and speed (17(a)(i)) and watch whether the give-way "
             "vessel acts."
         )
-        return self._offer(now_ns, token, voyage_id, maintain, ids, (*rules, "17(a)(i)"), kin, why)
+        return self._offer(
+            now_ns, token, voyage_id, maintain, ids, (*rules, "17(a)(i)"), kin, lambda m: why, worst
+        )
 
     def _offer(
-        self, now_ns, token, voyage_id, m: Manoeuvre, ids, rules, kin, rationale
+        self,
+        now_ns,
+        token,
+        voyage_id,
+        m: Manoeuvre,
+        ids,
+        rules,
+        kin,
+        explain: Callable[[Manoeuvre], str],
+        worst: Risk,
+        recheck: Recheck | None = None,
     ) -> list[Emit]:
         current = self._advice
-        same = (
-            current is not None
-            and current.record.kind == m.kind
-            and set(current.record.encounter_ids) == set(ids)
-            and _close(current.record.course_deg, m.course_deg, self.cfg.same_course_tolerance_deg)
-            and _close(current.record.sog_knots, m.sog_knots, self.cfg.same_speed_tolerance_knots)
-        )
-        if same:
-            if now_ns - current.last_restated_ns < self.cfg.advice_restate_s * 1e9:
-                return []
-            restated = self._make_advice(
+        held = self._held(current, now_ns, m, ids, worst, recheck)
+        if current is not None:
+            current.worst = worst
+        if held is None:
+            new = self._make_advice(
                 now_ns,
                 token,
                 voyage_id,
@@ -420,35 +483,87 @@ class Advisor:
                 kin,
                 m,
                 rules,
-                rationale,
-                advice_id=current.record.advice_id,
-                from_course=current.record.from_course_deg,
-                from_sog=current.record.from_sog_knots,
+                explain(m),
             )
-            self._advice = _Advice(restated, now_ns, now_ns + int(self.cfg.advice_validity_s * 1e9))
-            return [
-                Emit(
-                    "navigation_advice",
-                    restated.to_payload(),
-                    source_id=f"{token}/{restated.advice_id}",
-                )
-            ]
-        new = self._make_advice(
+            return self._supersede(now_ns, token, new, m, worst)
+        if now_ns - current.last_restated_ns < self.cfg.advice_restate_s * 1e9:
+            return []
+        # Restated as offered: one advice_id names one manoeuvre. Only its prediction is renewed,
+        # so the expected CPA it carries is against the traffic as it is now.
+        restated = self._make_advice(
             now_ns,
             token,
             voyage_id,
-            m.kind,
+            held.kind,
             ids,
-            m.course_deg,
-            m.sog_knots,
+            held.course_deg,
+            held.sog_knots,
             kin,
-            m,
+            held,
             rules,
-            rationale,
+            explain(held),
+            advice_id=current.record.advice_id,
+            from_course=current.record.from_course_deg,
+            from_sog=current.record.from_sog_knots,
         )
-        return self._supersede(now_ns, token, new)
+        current.record, current.last_restated_ns = restated, now_ns  # manoeuvre stays as offered
+        current.valid_to_ns = now_ns + int(self.cfg.advice_validity_s * 1e9)
+        return [
+            Emit(
+                "navigation_advice",
+                restated.to_payload(),
+                source_id=f"{token}/{restated.advice_id}",
+            )
+        ]
 
-    def _supersede(self, now_ns, token, new: AdviceRecord) -> list[Emit]:
+    def _held(
+        self, current: _Advice | None, now_ns, m: Manoeuvre, ids, worst, recheck
+    ) -> Manoeuvre | None:
+        """The manoeuvre the current advice keeps advising, or None when ``m`` replaces it.
+
+        Kept while the synthesis still proposes it (kind family, course and speed within
+        tolerance). Between avoiding kinds it is also kept when the synthesis proposes something
+        else, unless the situation escalates: its encounters change, their worst risk rises, or it
+        stops clearing them. For ``advice_min_hold_s`` after it was offered "clearing" is judged
+        with the passing distances relaxed by ``clear_margin`` (the hysteresis the risk grades
+        use); after that, at the distances themselves. Advice that still works is not replaced by
+        other advice that also works: the synthesis always proposes a fresh alteration from the
+        present course, so replacing it would have the vessel chase each new proposal.
+        Stand-on MAINTAIN turning into action, closing and resuming track are never held back.
+        """
+        if current is None or current.manoeuvre is None:
+            return None
+        if set(current.record.encounter_ids) != set(ids):
+            return None
+        held = current.manoeuvre
+        checkable = (
+            recheck is not None and held.course_deg is not None and held.sog_knots is not None
+        )
+        renewed = held
+        if checkable:
+            prediction, clears = recheck(held.course_deg, held.sog_knots)
+            renewed = replace(held, prediction=prediction, satisfied=clears)
+        if _same_manoeuvre(current.record, m, self.cfg):
+            return renewed  # the synthesis says the same: re-issuing it would change nothing
+        if not (held.kind in AVOIDING_KINDS and m.kind in AVOIDING_KINDS and checkable):
+            return None
+        if worst > current.worst:
+            return None  # escalated: the risk rose
+        if now_ns - current.offered_ns < self.cfg.advice_min_hold_s * 1e9:
+            clears = recheck(held.course_deg, held.sog_knots, self.cfg.clear_margin)[1]
+        else:
+            clears = renewed.satisfied
+        if clears:
+            # Inside the hold's margin it is still advice that works: its rationale must not
+            # claim, and raise the alarm, that no manoeuvre clears.
+            return replace(renewed, satisfied=True)
+        if not held.satisfied and not m.satisfied:
+            return renewed  # it never cleared and nothing else does either: keep the best effort
+        return None  # it no longer clears
+
+    def _supersede(
+        self, now_ns, token, new: AdviceRecord, m: Manoeuvre | None = None, worst=Risk.NONE
+    ) -> list[Emit]:
         out = []
         if self._advice is not None:
             out.append(
@@ -461,7 +576,9 @@ class Advisor:
                     superseded_by=new.advice_id,
                 )
             )
-        self._advice = _Advice(new, now_ns, now_ns + int(self.cfg.advice_validity_s * 1e9))
+        self._advice = _Advice(
+            new, now_ns, now_ns + int(self.cfg.advice_validity_s * 1e9), now_ns, m, worst
+        )
         out.append(
             Emit("navigation_advice", new.to_payload(), source_id=f"{token}/{new.advice_id}")
         )
@@ -591,6 +708,14 @@ class Advisor:
         return [Emit("alarm", p) for p in self.alarms.step(now_ns, wanted)]
 
 
+def _same_manoeuvre(record: AdviceRecord, m: Manoeuvre, cfg: AdvisorConfig) -> bool:
+    return (
+        _FAMILY.get(record.kind, record.kind) == _FAMILY.get(m.kind, m.kind)
+        and _close(record.course_deg, m.course_deg, cfg.same_course_tolerance_deg)
+        and _close(record.sog_knots, m.sog_knots, cfg.same_speed_tolerance_knots)
+    )
+
+
 def _close(a, b, tol) -> bool:
     if a is None or b is None:
         return a is None and b is None
@@ -620,6 +745,7 @@ def advisor_config(conf: dict) -> AdvisorConfig:
         clear_margin=cr["clear_margin"],
         advice_validity_s=cr["advice_validity_s"],
         advice_restate_s=cr["advice_restate_s"],
+        advice_min_hold_s=cr["advice_min_hold_s"],
         restricted_visibility_m=cr["restricted_visibility_m"],
         thresholds={k: Thresholds(**v) for k, v in cr["thresholds"].items()},
         synthesis=SynthesisConfig(

@@ -86,6 +86,8 @@ colreg:
   clear_margin: 1.2                # a grade is left only beyond 1.2 x its threshold
   advice_validity_s: 30
   advice_restate_s: 5
+  advice_min_hold_s: 30             # offered advice is kept this long unless encounters change,
+                                   # risk rises or it stops clearing (0: no hold)
   restricted_visibility_m: 1852    # below this (visibility_range_m input), Rule 19 applies
   min_alteration_deg: 30           # Rule 8: readily apparent
   max_alteration_deg: 90

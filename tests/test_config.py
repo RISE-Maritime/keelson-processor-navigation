@@ -169,3 +169,23 @@ def test_example_traffic_feeds_are_maritimedb():
     conf = config_mod.load(ns(config=str(ROOT / "config" / "processor.example.yaml")))
     assert {f["entity"] for f in conf["traffic"]["feeds"]} == {"maritimedb"}
     assert conf["modules"]["traffic"] is True
+
+
+@pytest.mark.parametrize("value", ["-1", "true", "soon"])
+def test_advice_min_hold_is_validated(tmp_path, value):
+    path = _write(tmp_path, f"entity_id: v\ncolreg:\n  advice_min_hold_s: {value}\n")
+    with pytest.raises(config_mod.ConfigError, match="advice_min_hold_s"):
+        config_mod.load(ns(config=path))
+
+
+@pytest.mark.parametrize("value, expected", [("0", 0), ("45", 45)])
+def test_advice_min_hold_reaches_the_advisor(tmp_path, value, expected):
+    from nav.colreg.advisor import advisor_config
+
+    path = _write(tmp_path, f"entity_id: v\ncolreg:\n  advice_min_hold_s: {value}\n")
+    assert advisor_config(config_mod.load(ns(config=path))).advice_min_hold_s == expected
+
+
+def test_advice_min_hold_defaults_to_30_s():
+    conf = config_mod.load(ns(config=str(ROOT / "config" / "processor.example.yaml")))
+    assert conf["colreg"]["advice_min_hold_s"] == 30
