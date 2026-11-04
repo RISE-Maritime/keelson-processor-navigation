@@ -153,6 +153,8 @@ DECISION_LOG_DEFAULTS = {
 DEFAULTS: dict = {
     "realm": "rise",
     "entity_id": None,
+    # Slipway ADR-0139: the run this vessel belongs to; see instance.py. Empty: the plain names.
+    "slipway_instance": "",
     "source_base": "navigation/0",
     "codec": "rider",
     "tick_hz": 10.0,
@@ -168,7 +170,7 @@ DEFAULTS: dict = {
     "control": copy.deepcopy(CONTROL_DEFAULTS),
 }
 
-_CLI_OVERRIDES = ("realm", "entity_id", "source_base", "codec")
+_CLI_OVERRIDES = ("realm", "entity_id", "slipway_instance", "source_base", "codec")
 _MERGED_SECTIONS = (
     "modules",
     "route_monitor",
@@ -503,6 +505,29 @@ def _validate_colreg(conf: dict) -> None:
         )
 
 
+def _apply_slipway_instance(conf: dict) -> None:
+    """Rename the vessel and every traffic feed onto the run's instance, once, before anything
+    derives a key or a controller id from them (Slipway ADR-0139)."""
+    from .instance import bus_entity, validate
+
+    try:
+        instance = validate(conf.get("slipway_instance", ""))
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
+    if not instance:
+        return
+    if isinstance(conf.get("entity_id"), str):
+        conf["entity_id"] = bus_entity(conf["entity_id"], instance)
+    feeds = conf.get("traffic", {}).get("feeds")
+    if isinstance(feeds, list):
+        conf["traffic"]["feeds"] = [
+            {**feed, "entity": bus_entity(feed["entity"], instance)}
+            if isinstance(feed, dict) and isinstance(feed.get("entity"), str)
+            else feed
+            for feed in feeds
+        ]
+
+
 def load(args=None) -> dict:
     """Assemble the runtime config from DEFAULTS, an optional YAML file and CLI args."""
     conf = copy.deepcopy(DEFAULTS)
@@ -523,6 +548,7 @@ def load(args=None) -> dict:
         if value is not None:
             conf[key] = value
 
+    _apply_slipway_instance(conf)
     _validate(conf)
     enabled = [m for m, on in conf["modules"].items() if on]
     logger.info(

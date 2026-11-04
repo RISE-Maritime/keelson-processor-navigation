@@ -29,6 +29,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-c", "--config", help="Path to a YAML config file.")
     parser.add_argument("-r", "--realm", help="Keelson realm / base path (default: rise).")
     parser.add_argument("-e", "--entity-id", help="The vessel this processor navigates.")
+    parser.add_argument(
+        "--slipway-instance",
+        help="Slipway ADR-0139: the run's instance, applied to the vessel and its traffic feeds.",
+    )
     parser.add_argument("--source-base", help="Source id prefix (default: navigation/0).")
     parser.add_argument("--codec", choices=config_mod.CODECS, help="rider or proto.")
     return parser.parse_args(argv)

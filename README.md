@@ -40,6 +40,11 @@ navigation --config config/processor.yaml --connect tcp/localhost:7447
 There is no default `entity_id`, and each input names its `source_id` explicitly. The
 processor refuses to start without them, and refuses simulator `truth` sources.
 
+**Under a Slipway instance** (Slipway ADR-0139), keep the authored names in the file and pass
+`--slipway-instance <i>` (or `slipway_instance:`): `slipway-usv-alpha` is then navigated as
+`slipway-<i>-usv-alpha` and a `slipway-ais-traffic` feed is read from `slipway-<i>-ais-traffic`.
+Other entities pass through, and an empty instance is the plain names (`src/nav/instance.py`).
+
 ## What route monitoring reads and writes
 
 | Direction | Key under `{realm}/@v0/{entity_id}/pubsub/` | Notes |
