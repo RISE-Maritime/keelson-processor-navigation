@@ -53,6 +53,9 @@ class Inputs:
         self.clock = clock
         self._subscribers = []
         self._warned: set[str] = set()
+        # What this processor reads, by name, as it declares it: the answer to
+        # subscriber/v1's get_subscriptions (see bus/subscriptions.py).
+        self._subscriptions: dict[str, str] = {}
 
     def _key(self, subject: str, source: str) -> str:
         import keelson
@@ -92,7 +95,12 @@ class Inputs:
             for feed in self.conf["traffic"]["feeds"]:
                 for subject in TARGET_SUBJECTS:
                     key = self._target_key(feed["entity"], subject, feed["source"])
-                    self._subscribe(key, self._target_handler(feed, subject), label=key)
+                    self._subscribe(
+                        key,
+                        self._target_handler(feed, subject),
+                        label=key,
+                        name=f"{subject}@{feed['entity']}",
+                    )
 
         if self.need_routes:
             for selector, handler in (
@@ -118,8 +126,25 @@ class Inputs:
             self.conf["realm"], entity, subject, source, target_id="*"
         )
 
-    def _subscribe(self, key: str, handler, label: str | None = None) -> None:
+    @property
+    def subscriptions(self) -> dict[str, str]:
+        """Every key this processor reads, by name: its subject, or ``subject@entity`` for a
+        traffic feed, where one subject is read from several entities. A copy."""
+        return dict(self._subscriptions)
+
+    def _subscribe(
+        self, key: str, handler, label: str | None = None, name: str | None = None
+    ) -> None:
+        if name is None:
+            tail = pubsub_tail(key)
+            name = tail[0] if tail else key
+        if name in self._subscriptions:
+            # Two subscriptions under one name would make the map say less than was read.
+            raise ValueError(
+                f"two subscriptions named {name!r}: {self._subscriptions[name]}, {key}"
+            )
         self._subscribers.append(self.session.declare_subscriber(key, self._guard(handler, label)))
+        self._subscriptions[name] = key
         logger.info("Subscribed %s", key)
 
     def _guard(self, handler, label: str | None = None):

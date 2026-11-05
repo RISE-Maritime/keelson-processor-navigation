@@ -125,3 +125,49 @@ def test_target_samples_are_keyed_by_target_id(traffic_conf):
             )
         )
     assert len(inp.world.snapshot().rejected) == 1
+
+
+class RecordingSession:
+    """Enough of a zenoh session for `Inputs.start`: records each declared key."""
+
+    def __init__(self):
+        self.declared: list[str] = []
+
+    def declare_subscriber(self, key, handler):
+        self.declared.append(key)
+        return object()
+
+    def get(self, selector, timeout=None):
+        return []
+
+
+def test_it_records_what_it_reads_under_the_name_subscriber_v1_answers_with(traffic_conf):
+    from nav.world.targets import TARGET_SUBJECTS
+
+    traffic_conf["traffic"]["feeds"].append({"entity": "nav-test-radar", "source": "arpa"})
+    session = RecordingSession()
+    inputs = Inputs(session, traffic_conf, World(), need_routes=True, need_targets=True)
+    inputs.start()
+
+    got = inputs.subscriptions
+    assert sorted(got.values()) == sorted(session.declared), "every declared key, and only those"
+    assert got["location_fix"] == f"{BASE}/location_fix/gnss"
+    assert got["route"] == f"{BASE}/route/**"
+    for entity, source in (("nav-test-ais", "ais"), ("nav-test-radar", "arpa")):
+        for subject in TARGET_SUBJECTS:
+            key = got[f"{subject}@{entity}"]
+            assert key.startswith(f"rise/@v0/{entity}/pubsub/{subject}/{source}")
+
+
+def test_subscriptions_is_a_copy(traffic_conf):
+    inputs = Inputs(RecordingSession(), traffic_conf, World(), need_routes=True)
+    inputs.start()
+    inputs.subscriptions.clear()
+    assert inputs.subscriptions
+
+
+def test_two_subscriptions_under_one_name_are_refused(monitor_conf):
+    inputs = Inputs(RecordingSession(), monitor_conf, World(), need_routes=False)
+    inputs._subscribe(f"{BASE}/location_fix/gnss", lambda s: None)
+    with pytest.raises(ValueError, match="two subscriptions named 'location_fix'"):
+        inputs._subscribe(f"{BASE}/location_fix/rtk", lambda s: None)

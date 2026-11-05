@@ -138,6 +138,13 @@ def run(session, conf: dict, stop) -> None:
         stack.callback(inputs.close)
         inputs.start()
 
+        # Every running processor says what it reads (subscriber/v1), whatever modules are on.
+        from .bus.subscriptions import SubscriberServer
+
+        subscriber = SubscriberServer(session, conf, inputs)
+        stack.callback(subscriber.close)
+        subscriber.start()
+
         if processor.controller is not None:
             from .bus.control import ControlServer
 

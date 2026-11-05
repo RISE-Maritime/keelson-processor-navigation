@@ -200,6 +200,22 @@ given for a voyage: once that voyage is no longer the one selected, guidance ret
 Every call that changes something is in the decision log (`KIND_VOYAGE_CHANGED`,
 `KIND_GUIDANCE_ORDER`), with the voyage's own `audit_trail` naming the caller.
 
+## What subscriber/v1 says
+
+Every running processor serves keelson's `subscriber/v1`, whatever modules are on, at
+`{realm}/@v0/{entity_id}/@rpc/subscriber/v1/{procedure}/navigation/0`.
+
+- **`get_subscriptions`** answers `{name: key}` for every key the processor actually declared.
+  The name is the subject, or `subject@entity` for a traffic feed, where one subject is read
+  from several entities.
+- **`set_subscriptions`** is refused (`UNSUPPORTED`). The inputs are fixed by configuration at
+  start, and a success that changed nothing would be worse than saying so.
+
+Slipway asks this at the start of every run and records the answer in its manifest. Reading the
+simulator's truth is unrestricted on its bus, so a run proves more or less depending on whether
+this processor read `…/truth` or only what a real vessel publishes. The manifest is how whoever
+cites the run can tell.
+
 ## Deployment
 
 A vessel has one control mapping and the last writer wins, so with `guidance` enabled this processor
