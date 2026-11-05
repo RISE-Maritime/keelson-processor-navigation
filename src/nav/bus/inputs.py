@@ -243,7 +243,12 @@ class Inputs:
 
         message = self._decode(sample, "command_authority")
         payload = json_format.MessageToDict(message, preserving_proto_field_name=True)
-        self.world.put_lease(payload, self.clock())
+        # The slot is the key after the subject: `{vessel}` for the conn, `{vessel}/navigation` for
+        # the navigation authority document, `{vessel}/navigational/session` for the commander's
+        # session. Only the conn feeds the lease book (crowsnest-dev#90).
+        tail = pubsub_tail(str(sample.key_expr))
+        slot = "/".join(tail[1]) if tail is not None else None
+        self.world.put_lease(payload, self.clock(), slot)
 
     def _on_request(self, sample) -> None:
         from google.protobuf import json_format

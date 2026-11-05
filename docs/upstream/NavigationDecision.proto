@@ -37,6 +37,7 @@ message NavigationDecision {
     KIND_ADVICE_ACCEPTED = 10;
     KIND_GUIDANCE_ORDER = 11;  // a navigation_control/v1 guidance order was taken up
     KIND_VOYAGE_CHANGED = 12;  // a navigation_control/v1 call activated, re-pinned or ended a voyage
+    KIND_ADVICE_HELD = 13;     // its own advice not accepted: collision_avoidance's control method (crowsnest-dev#90)
   }
 
   message Ownship {

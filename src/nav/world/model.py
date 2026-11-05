@@ -90,12 +90,13 @@ class World:
             out, self._dispositions = self._dispositions, []
         return out
 
-    def put_lease(self, payload: dict, received_ns: int) -> None:
-        """A command_authority message, as its payload dict, stamped with local receipt time."""
+    def put_lease(self, payload: dict, received_ns: int, slot: str | None = None) -> None:
+        """A command_authority message, as its payload dict, stamped with local receipt time. `slot`
+        is the key after the subject (`{vessel}`, `{vessel}/navigation`, ...); None is the conn."""
         with self._lock:
-            self._leases.append((payload, received_ns))
+            self._leases.append((payload, received_ns, slot))
 
-    def take_leases(self) -> list[tuple[dict, int]]:
+    def take_leases(self) -> list[tuple[dict, int, str | None]]:
         with self._lock:
             out, self._leases = self._leases, []
         return out

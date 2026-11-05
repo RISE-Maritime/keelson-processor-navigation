@@ -12,10 +12,10 @@ requires-python = ">=3.11"
 authors = [{ name = "RISE Maritime" }]
 dependencies = [
     # An exact published keelson, never a local checkout. This is keelson's experimental channel
-    # (0.6.0-experimental.16 on npm; dev + open PRs incl. #282 navigation_control/v1, #308 go_to,
-    # #316 setpoint subjects, #320 DP + loiter, #322 settings, #324 track offset + reverse), the build Crowsnest pins; repin to the -pre.N
-    # carrying them once they merge.
-    "keelson==0.6.0.dev16",
+    # (0.6.0-experimental.21 on npm; dev + open PRs incl. #282 navigation_control/v1, #308 go_to,
+    # #316 setpoint subjects, #320 DP + loiter, #322 settings, #324 track offset + reverse, and #331
+    # NavigationAuthority, read for crowsnest-dev#90); repin to the -pre.N carrying them once they merge.
+    "keelson==0.6.0.dev21",
     "eclipse-zenoh>=1.2.1",
     "protobuf>=5.29.1",
     "pyyaml>=6.0",

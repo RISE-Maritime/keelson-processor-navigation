@@ -179,6 +179,22 @@ re-arms it. Holding the conn itself is full automation: only then does it take n
 of its own (`auto_accept_advice`); under an operator's conn advice stays advice until the holder
 accepts it.
 
+**Navigation authority per function** (crowsnest-dev#90). Accepting its own COLREG advice also needs
+`collision_avoidance` delegated to it, in the navigation authority document the
+NAVIGATIONAL_COMMAND holder writes. The document is the `command_authority` record on
+`{vessel}/navigation`, and the process is its `conduct.controller_id`. Both the operational-authority
+ceiling and the function's control method must allow the accept:
+- **no document, held by another, or method 1-2:** never; a human confirms each decision;
+- **method 3:** only after the advice's veto window (`valid_from` + `intervention_window_ms`) has
+  passed with no REJECTED disposition. Even then, only if a veto could have arrived: the
+  navigational commander's session (`{vessel}/navigational/session`) is live, or, without
+  `intent_delivery_required`, collision_avoidance continues on comms loss;
+- **method 4-5:** at once.
+
+Why it did not accept is logged as `KIND_ADVICE_HELD`. **Behaviour change:** `auto_accept_advice`
+on its own no longer accepts anything. Records on other `command_authority` slots (the document,
+sessions, payload leases) never reach the conn's lease book.
+
 **Getting the conn back.** A live lease cannot be seized, and this process heartbeats its lease
 for as long as it has a route, so it answers `command_request` (`conduct.yield_on_request`, on by
 default): an operator's request is granted with keelson's directed `grant` -- a fresh token naming

@@ -111,7 +111,8 @@ conduct:
   authority_source: null           # operational_authority source; without one the level is UNKNOWN and guidance never drives
   authority_max_age_s: 10
   fixed_authority_level: null      # software-in-the-loop only, e.g. AUTHORITY_LEVEL_REMOTE_CONTROLLED; stated in every navigation_state
-  auto_accept_advice: false        # accept colreg advice: ASSISTED_AUTONOMOUS below DANGER, FULL_AUTONOMOUS always
+  auto_accept_advice: false        # accept colreg advice: ASSISTED_AUTONOMOUS below DANGER, FULL_AUTONOMOUS always,
+                                   # and only as collision_avoidance's control method allows (README, crowsnest-dev#90)
 
 guidance:
   # Drives vehicle_control/v1 steering and throttle (joystick_x_pct, joystick_y_pct). A vessel has one

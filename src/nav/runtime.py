@@ -18,6 +18,7 @@ from .bus.codec import rfc3339
 from .colreg.advisor import SUBJECTS as COLREG_SUBJECTS
 from .colreg.advisor import Advisor, OwnState, advisor_config
 from .colreg.records import DispositionRecord
+from .conduct import functions as functions_mod
 from .conduct.authority import UNKNOWN, InForce, in_force, may_auto_accept, may_drive
 from .conduct.fsm import Conduct, Gates
 from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig, is_navigation_process
@@ -93,6 +94,11 @@ class Processor:
         cd = conf["conduct"]
         self.conduct = Conduct()
         self.lease_book = LeaseBook()
+        # The navigation authority document (command_authority `{vessel}/navigation`) and the
+        # navigational commander's session, as last heard (crowsnest-dev#90).
+        self.nav_doc: functions_mod.Document | None = None
+        self.nav_session = LeaseBook()
+        self._accept_hold: tuple[str, str] | None = None  # (advice_id, why) last logged
         self.lease = LeaseClient(
             LeaseConfig(
                 vessel_id=conf["entity_id"],
@@ -264,8 +270,7 @@ class Processor:
             return []
         # Hear leases first: a scenario that grants the conn and calls straight after must be
         # judged against the grant, not the lease book of the previous tick.
-        for payload, received_ns in self.world.take_leases():
-            self.lease_book.hear(payload, received_ns)
+        self._hear_leases()
         source = config_mod.module_source_id(self.conf, CONTROL)
         out: list[Output] = []
         for pending in pendings:
@@ -415,8 +420,7 @@ class Processor:
     def _conduct_step(self, snapshot, now_ns: int) -> list[Output]:
         cd = self.conf["conduct"]
         out: list[Output] = []
-        for payload, received_ns in self.world.take_leases():
-            self.lease_book.hear(payload, received_ns)
+        self._hear_leases()
         yield_to = self._request_to_answer(now_ns)
         for kind, detail in self.world.take_helm_events():
             self._decide(now_ns, kind, config_mod.module_source_id(self.conf, GUIDANCE), detail)
@@ -605,6 +609,21 @@ class Processor:
         self._stood_down_at = self._holder_orders
         self._directed_by = None
 
+    def _hear_leases(self) -> None:
+        """Route each command_authority record by its slot: the conn to the lease book, the
+        navigation authority document and the navigational session to their own. A record from any
+        other slot (a payload lease, the overall session) is not this process's business."""
+        vessel = self.conf["entity_id"]
+        for payload, received_ns, slot in self.world.take_leases():
+            if slot is None or slot == vessel:
+                self.lease_book.hear(payload, received_ns)
+            elif slot == f"{vessel}/navigation":
+                doc = functions_mod.read_document(payload)
+                if doc is not None:
+                    self.nav_doc = doc
+            elif slot == f"{vessel}/navigational/session":
+                self.nav_session.hear(payload, received_ns)
+
     def _auto_accept(self, now_ns: int) -> list[Output]:
         """Accept the advisor's undecided advice when the conn is held, guidance is UNDERWAY and
         the authority level allows it for the advice's worst risk (docs/PLAN.md §1)."""
@@ -617,6 +636,32 @@ class Processor:
         level = self.authority.level
         if not may_auto_accept(level, risk):
             return []
+        # The function's method decides too (crowsnest-dev#90): both the operational-authority
+        # ceiling and collision_avoidance's control method must allow it.
+        verdict = functions_mod.advice_decision(
+            self.nav_doc,
+            config_mod.controller_id(self.conf),
+            now_ns,
+            _ns(advice.valid_from),
+            self.nav_session.holder(now_ns) is not None,
+        )
+        if verdict.kind != functions_mod.ACCEPT:
+            hold = (
+                advice.advice_id,
+                verdict.kind if verdict.kind == functions_mod.WAIT else verdict.reason,
+            )
+            if hold != self._accept_hold:
+                self._accept_hold = hold
+                self._decide(
+                    now_ns,
+                    "KIND_ADVICE_HELD",
+                    config_mod.module_source_id(self.conf, "conduct"),
+                    f"{advice.kind} advice {advice.advice_id} not accepted: {verdict.reason}",
+                    reason=verdict.reason,
+                    advice_id=advice.advice_id,
+                    encounter_ids=tuple(advice.encounter_ids),
+                )
+            return []
         decided_by = config_mod.module_source_id(self.conf, "conduct")
         record = DispositionRecord(
             rfc3339(now_ns),
@@ -624,7 +669,7 @@ class Processor:
             advice.voyage_id,
             "STATE_ACCEPTED",
             decided_by=decided_by,
-            reason=f"accepted by conduct at {level}; worst encounter risk {risk}",
+            reason=f"accepted by conduct at {level}, {verdict.reason}; worst encounter risk {risk}",
         )
         self.advisor.record_disposition(record)
         self._decide(
@@ -774,3 +819,15 @@ def _response(procedure: str, outcome: Outcome, state: dict, settings=None) -> d
     if procedure == "load_route" and outcome.accepted and outcome.voyage_id is not None:
         response["voyage_id"] = outcome.voyage_id
     return response
+
+
+def _ns(rfc3339_time: str) -> int:
+    """A protobuf JSON Timestamp as epoch nanoseconds; 0 when absent or unreadable."""
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    try:
+        ts = Timestamp()
+        ts.FromJsonString(rfc3339_time)
+        return ts.ToNanoseconds()
+    except (ValueError, TypeError):
+        return 0
