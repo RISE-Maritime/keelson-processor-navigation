@@ -40,6 +40,13 @@ class WaypointPlan:
     leg: LegLimits | None = None
     wheel_over_distance_m: float | None = None  # Waypoint.wheel_over_distance_m; None: derive it
     operational_context: str | None = None  # keelson.OperationalContext name; None when unspecified
+    # keelson#275: the leg leaving this waypoint as a VARIABLE corridor, its boundaries as WGS-84
+    # (lat, lon) vertices -- authoritative, the line a monitor checks against. Only a VARIABLE leg
+    # reads them: a shape left behind by a switch back to FIXED is never sailed. Per waypoint, never
+    # from Waypoints.defaults, because a boundary belongs to its leg (crowsnest-dev#287).
+    xtd_variable: bool = False
+    xtd_port_boundary: tuple[tuple[float, float], ...] = ()
+    xtd_starboard_boundary: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -114,9 +121,27 @@ class RoutePlan:
             if j < n - 1:
                 leg = self.leg(n - 2 - j)
                 leg = replace(leg, xtd_port_m=leg.xtd_starboard_m, xtd_starboard_m=leg.xtd_port_m)
-                out.append(replace(w, leg=leg, planned_sog_knots=self.planned_sog_knots(n - 2 - j)))
+                src = wps[n - 2 - j]  # the waypoint whose leg this was
+                out.append(
+                    replace(
+                        w,
+                        leg=leg,
+                        planned_sog_knots=self.planned_sog_knots(n - 2 - j),
+                        xtd_variable=src.xtd_variable,
+                        xtd_port_boundary=src.xtd_starboard_boundary,
+                        xtd_starboard_boundary=src.xtd_port_boundary,
+                    )
+                )
             else:
-                out.append(replace(w, leg=None))
+                out.append(
+                    replace(
+                        w,
+                        leg=None,
+                        xtd_variable=False,
+                        xtd_port_boundary=(),
+                        xtd_starboard_boundary=(),
+                    )
+                )
         return replace(self, waypoints=tuple(out))
 
 

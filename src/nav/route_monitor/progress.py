@@ -3,7 +3,8 @@
 Improves on Crowsnest's computeRouteExecution in four ways that each change a reading:
   - progress is sticky and forward-only, so a route that doubles back does not jump legs;
   - before the first leg the vessel is on leg 0, not the last one;
-  - the deviation limit is the one for the side the vessel is on;
+  - the deviation limit is the one for the side the vessel is on, and on a VARIABLE corridor the
+    one where she is (corridor.py);
   - with no planned speed and no usable SOG there is no arrival ETA, rather than an assumed 10 kn.
 """
 
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 
 from ..world.route import RoutePlan
 from . import geodesy as g
+from .corridor import limits_at_ship, limits_where_ship_is
 
 KNOT_MPS = 1852.0 / 3600.0
 
@@ -93,6 +95,18 @@ class ProgressTracker:
         fallback = self.cfg.xtd_limit_fallback_m
         port_limit = limits.xtd_port_m if limits.xtd_port_m is not None else fallback
         stbd_limit = limits.xtd_starboard_m if limits.xtd_starboard_m is not None else fallback
+        if a.xtd_variable:
+            # A VARIABLE corridor is judged where she is, each side falling back to the leg's
+            # (crowsnest-dev#287; the same rule as Crowsnest's limitsAtShip).
+            here = limits_at_ship(
+                (a.lat, a.lon),
+                (b.lat, b.lon),
+                lat,
+                lon,
+                a.xtd_port_boundary,
+                a.xtd_starboard_boundary,
+            )
+            port_limit, stbd_limit = limits_where_ship_is(here, (port_limit, stbd_limit))
         threshold = stbd_limit if xtd >= 0 else port_limit
 
         eta_next = eta_arrival = None

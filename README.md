@@ -57,6 +57,14 @@ Other entities pass through, and an empty instance is the plain names (`src/nav/
 | out | `envelope_exceedance/{voyage_id}/{exceedance_id}` | Voyages only. Opened on breach, restated in full on close |
 | out | `alarm/navigation/0/route_monitor` | Deviation (WARNING), approaching the XTD limit (CAUTION: under `approach_time_s` at the present rate), envelope, no position, dangling route. Cleared by publishing an expired alarm |
 
+**Which limit.** On a leg with a VARIABLE corridor (keelson#275 `xtd_corridor_mode`), the deviation
+and the approach are both judged against the corridor **where she is**: each side's
+`xtd_*_boundary` is crossed with her abeam line, and the crossing nearest the track is used. A side
+the boundary does not reach falls back to the leg's `xtd_*_m`, and that to `xtd_limit_fallback_m`.
+This is the same rule as Crowsnest's `limitsAtShip`, pinned on the same literal corridor
+(`tests/test_corridor.py`, crowsnest-dev#287). A FIXED leg uses its own limits and never reads a
+boundary left over from a switch back.
+
 ## What traffic reads and writes
 
 | Direction | Key | Notes |

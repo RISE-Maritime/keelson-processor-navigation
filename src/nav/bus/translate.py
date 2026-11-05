@@ -31,6 +31,31 @@ def _leg(leg_msg) -> LegLimits:
     return LegLimits(**{ours: _opt(leg_msg, theirs) for ours, theirs in _LEG_FIELDS.items()})
 
 
+def _boundary(points) -> tuple[tuple[float, float], ...]:
+    """An XTD boundary's WGS-84 vertices; one without a usable position is dropped."""
+    out = []
+    for p in points:
+        if not p.HasField("position"):
+            continue
+        lat, lon = p.position.latitude_deg, p.position.longitude_deg
+        if math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180:
+            out.append((lat, lon))
+    return tuple(out)
+
+
+def _variable(leg_msg) -> bool:
+    try:
+        name = (
+            type(leg_msg)
+            .DESCRIPTOR.fields_by_name["xtd_corridor_mode"]
+            .enum_type.values_by_number[leg_msg.xtd_corridor_mode]
+            .name
+        )
+    except (KeyError, AttributeError):
+        return False
+    return name == "XTD_CORRIDOR_MODE_VARIABLE"
+
+
 def route_plan(route) -> RoutePlan:
     wps = []
     for w in route.waypoints.waypoint:
@@ -52,6 +77,11 @@ def route_plan(route) -> RoutePlan:
                 wheel_over_distance_m=_opt(w, "wheel_over_distance_m"),
                 leg=_leg(w.leg) if w.HasField("leg") else None,
                 operational_context=_enum_name(w, "operational_context"),
+                xtd_variable=w.HasField("leg") and _variable(w.leg),
+                xtd_port_boundary=_boundary(w.leg.xtd_port_boundary) if w.HasField("leg") else (),
+                xtd_starboard_boundary=(
+                    _boundary(w.leg.xtd_starboard_boundary) if w.HasField("leg") else ()
+                ),
             )
         )
     defaults = route.waypoints.defaults
