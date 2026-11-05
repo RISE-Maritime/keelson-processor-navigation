@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from . import config as config_mod
-from .bus.codec import rfc3339
+from .bus.codec import has_fields, rfc3339
 from .colreg.advisor import SUBJECTS as COLREG_SUBJECTS
 from .colreg.advisor import Advisor, OwnState, advisor_config
 from .colreg.records import DispositionRecord
@@ -26,6 +26,7 @@ from .conduct.state import Mode, NavigationState, RouteRef
 from .control import settings as settings_mod
 from .control.commands import Context, Controller, InvalidRequest, Outcome, Pending
 from .control.orders import TRACK
+from .guidance import candidates as candidates_mod
 from .guidance.axes import UNKNOWN as HELM_UNKNOWN
 from .guidance.axes import Actuation, ownership
 from .guidance.guide import MODULE as GUIDANCE
@@ -114,6 +115,23 @@ class Processor:
         self.guidance = Guidance(conf) if self.enabled(GUIDANCE) else None
         self.controller = Controller(conf, id_factory) if self.enabled(CONTROL) else None
         self.order = TRACK  # the guidance order in force (navigation_control/v1)
+        # The human decision in force has an id this process draws (NavigationState.order_id,
+        # crowsnest-dev#94): a gate checks a HUMAN_ORDER candidate against it. None: no order taken.
+        self._new_id = id_factory or (lambda: __import__("uuid").uuid4().hex)
+        self._order_id: str | None = None
+        self._ordered_by = ""
+        # Behind a motion gate (guidance.backend: gate): the candidates to propose, and why a
+        # mapped DOF gets none (logged when it changes).
+        self._gate = conf.get("guidance", {}).get("backend") == "gate"
+        self._candidates: tuple = ()
+        self._candidate_why: tuple = ()
+        # Advice published on an earlier tick: delivered, so a veto could be answered (#94).
+        self._published_advice: set[str] = set()
+        # What this keelson build's NavigationState carries (#90's and #94's fields).
+        self._state_functions = has_fields(
+            "navigation_state", "functions_in_force", "navigation_authority_revision"
+        )
+        self._state_order = has_fields("navigation_state", "order_id", "ordered_by")
         self.colreg_active = True  # set_settings may pause the advisor (keelson#322)
         self._order_voyage: str | None = None  # the voyage it was given for
         self.decisions = DecisionLog(conf, id_factory) if self.enabled(DECISION_LOG) else None
@@ -153,8 +171,12 @@ class Processor:
 
     @property
     def actuation(self) -> Actuation:
-        """What guidance wants on the helm now. Silence unless guidance is driving."""
-        return self.guidance.actuation if self.guidance is not None else Actuation()
+        """What guidance wants on the helm now. Silence unless guidance is driving. Behind a gate it
+        carries the candidates, and never a mapping request: that backend never installs one."""
+        act = self.guidance.actuation if self.guidance is not None else Actuation()
+        if self._gate:
+            return replace(act, mapping=None, candidates=self._candidates)
+        return act
 
     def target_publications(self) -> dict[str, tuple[str, ...]]:
         """Subjects each module publishes under ``@target``; they also get a target-scoped token."""
@@ -260,6 +282,10 @@ class Processor:
                 Output(DECISION_LOG, e.subject, e.payload, e.source_id)
                 for e in self.decisions.step(now_ns)
             ]
+        # Counted from the NEXT tick: an advice is delivered once its publication has gone out.
+        self._published_advice.update(
+            o.payload.get("advice_id", "") for o in outputs if o.subject == "navigation_advice"
+        )
         return outputs
 
     # -- control -------------------------------------------------------------------------------
@@ -308,7 +334,8 @@ class Processor:
                 for kind, summary in outcome.decisions:
                     self._decide(now_ns, kind, source, summary)
                 if outcome.order is not None:
-                    self._take_order(outcome.order, outcome.voyage_id)
+                    caller = (pending.request.get("caller") or {}).get("controller_id", "")
+                    self._take_order(outcome.order, outcome.voyage_id, caller)
                 if (
                     outcome.from_holder
                     and holder is not None
@@ -356,8 +383,11 @@ class Processor:
         if "route_alarms" in changes:
             self.conf["route_monitor"]["alarms"] = changes["route_alarms"]
 
-    def _take_order(self, order, voyage_id: str | None) -> None:
+    def _take_order(self, order, voyage_id: str | None, ordered_by: str) -> None:
         previous, self.order, self._order_voyage = self.order, order, voyage_id
+        # Every order taken is a new decision, with a new id: never one the request chose.
+        self._order_id, self._ordered_by = self._new_id(), ordered_by
+        self._next_state_ns = None  # published at once, before any candidate names the new id
         if self.guidance is not None:
             plan = None
             snap = self.world.snapshot()
@@ -378,7 +408,11 @@ class Processor:
         if voyage is not None and voyage.voyage_id == self._order_voyage:
             return
         was, given_for = self.order, self._order_voyage
-        self._take_order(TRACK, voyage.voyage_id if voyage is not None else None)
+        self._take_order(
+            TRACK,
+            voyage.voyage_id if voyage is not None else None,
+            config_mod.controller_id(self.conf),
+        )
         self._decide(
             now_ns,
             "KIND_GUIDANCE_ORDER",
@@ -562,6 +596,8 @@ class Processor:
                     order=self.order,
                 )
             ]
+            if self._gate:
+                self._gate_candidates(now_ns, accepted, self.lease_book.holder(now_ns))
         return out
 
     def _directed(self, now_ns: int, holder) -> bool:
@@ -644,6 +680,7 @@ class Processor:
             now_ns,
             _ns(advice.valid_from),
             self.nav_session.holder(now_ns) is not None,
+            delivered=advice.advice_id in self._published_advice,
         )
         if verdict.kind != functions_mod.ACCEPT:
             hold = (
@@ -735,12 +772,65 @@ class Processor:
         )
 
     def _helm(self, now_ns: int) -> str:
+        if self._gate:
+            gm = self._gate_map(now_ns)
+            gd = self.conf["guidance"]
+            return candidates_mod.gate_ownership(gm, self.conf["source_base"], gd["gate"]["dofs"])
         heard = self.world.helm()
         if heard is None or now_ns - heard[1] > self.conf["guidance"]["mapping_max_age_s"] * 1e9:
             return HELM_UNKNOWN
         return ownership(
             heard[0], self.conf["entity_id"], config_mod.module_source_id(self.conf, GUIDANCE)
         )
+
+    def _gate_map(self, now_ns: int):
+        """The gate's map as last read, or None when unread or older than mapping_max_age_s."""
+        heard = self.world.gate()
+        if heard is None or now_ns - heard[1] > self.conf["guidance"]["mapping_max_age_s"] * 1e9:
+            return None
+        return heard[0]
+
+    def _order_in_force(self, accepted) -> tuple[str | None, str]:
+        """The human decision this process is carrying out, as NavigationState.order_id names it.
+        While avoiding on an advice a human accepted, that advice; otherwise the guidance order, but
+        only while it carries out a holder's order or holds the conn itself."""
+        if accepted is not None and self.advisor is not None:
+            d = self.advisor.dispositions.get(accepted.advice_id)
+            if d is not None and not d.decided_by.startswith(f"{self.conf['source_base']}/"):
+                return f"advice/{accepted.advice_id}", d.decided_by
+        if self._order_id is not None and (self.directed or self.conn_held):
+            return self._order_id, self._ordered_by
+        return None, ""
+
+    def _gate_candidates(self, now_ns: int, accepted, holder) -> None:
+        """Behind a gate: one candidate per DOF this process is mapped to, with both bases."""
+        order_id, _ = self._order_in_force(accepted)
+        found, why = candidates_mod.candidates(
+            self.guidance.actuation.axes
+            if now_ns <= self.guidance.actuation.valid_until_ns
+            else None,
+            self._gate_map(now_ns),
+            self.conf["guidance"]["gate"]["dofs"],
+            self.conf["source_base"],
+            config_mod.controller_id(self.conf),
+            self.nav_doc,
+            holder.controller_id if holder is not None else None,
+            self.world.gate_epoch(),
+            accepted is not None,
+            accepted.advice_id if accepted is not None else None,
+            self.order.kind.value,
+            order_id,
+        )
+        self._candidates = found
+        if why != self._candidate_why:
+            self._candidate_why = why
+            if why:
+                self._decide(
+                    now_ns,
+                    "KIND_GUIDANCE_ORDER",
+                    config_mod.module_source_id(self.conf, GUIDANCE),
+                    "behind the gate: " + "; ".join(why),
+                )
 
     def _restricted(self, snapshot, now_ns: int) -> bool:
         visibility = self._visibility(snapshot, now_ns)
@@ -802,7 +892,30 @@ class Processor:
             guidance_order=(
                 self.order.to_payload() if sel.voyage is not None and plan is not None else None
             ),
+            **self._state_extras(now_ns),
         )
+
+    def _state_extras(self, now_ns: int) -> dict:
+        """#90's functions in force and #94's human decision, on a build that carries them."""
+        extras: dict = {}
+        if self._state_functions:
+            principal = config_mod.controller_id(self.conf)
+            extras["functions_in_force"] = tuple(
+                {
+                    "function": f"NAVIGATION_FUNCTION_{f.name.upper()}",
+                    "holder": f.holder,
+                    "holder_lease_id": f.holder_lease_id,
+                    "control_method": _METHOD_NAMES[f.method],
+                }
+                for f in functions_mod.held(self.nav_doc, principal)
+            )
+            extras["navigation_authority_revision"] = self.nav_doc.revision if self.nav_doc else 0
+        if self._state_order:
+            accepted = self.advisor.accepted_advice(now_ns) if self.advisor else None
+            order_id, ordered_by = self._order_in_force(accepted)
+            if order_id is not None:
+                extras.update(order_id=order_id, ordered_by=ordered_by)
+        return extras
 
 
 def _response(procedure: str, outcome: Outcome, state: dict, settings=None) -> dict:
@@ -819,6 +932,9 @@ def _response(procedure: str, outcome: Outcome, state: dict, settings=None) -> d
     if procedure == "load_route" and outcome.accepted and outcome.voyage_id is not None:
         response["voyage_id"] = outcome.voyage_id
     return response
+
+
+_METHOD_NAMES = {n: name for name, n in functions_mod.METHODS.items()}
 
 
 def _ns(rfc3339_time: str) -> int:

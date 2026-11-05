@@ -120,6 +120,21 @@ def test_method_four_and_five_accept_at_once():
         assert F.advice_decision(ca(method=m), ME, T0, T0, nav_session_live=False).kind == F.ACCEPT
 
 
+def test_method_three_waits_until_the_intent_was_published():
+    doc = ca(intervention_window_ms=10000)
+    v = F.advice_decision(doc, ME, T0 + 60 * S, T0, True, delivered=False)
+    assert v == F.Verdict(F.WAIT, "the intent has not been published yet")
+    # Methods 4-5 inform rather than wait for a veto, so delivery does not hold them.
+    four = ca(method="CONTROL_METHOD_MONITORED")
+    assert F.advice_decision(four, ME, T0, T0, False, delivered=False).kind == F.ACCEPT
+
+
+def test_an_advice_not_yet_published_is_held_by_the_runtime(proc, monkeypatch):
+    underway(proc, monkeypatch, record(fn("collision_avoidance", intervention_window_ms=0)))
+    proc._published_advice.clear()
+    assert proc._auto_accept(T0 + 60 * S) == [] and proc.advisor.recorded == []
+
+
 def test_method_three_waits_out_the_veto_window():
     doc = ca(intervention_window_ms=30000)
     assert F.advice_decision(doc, ME, T0 + 29 * S, T0, True) == F.Verdict(
@@ -234,6 +249,7 @@ def advice(valid_from_ns):
 
 def underway(proc, monkeypatch, doc_record, session_live=True):
     proc.advisor = FakeAdvisor(advice(T0))
+    proc._published_advice.add("adv-1")  # published on an earlier tick: delivered
     proc.authority = InForce(FULL_AUTONOMOUS, "test")
     monkeypatch.setattr(proc.conduct, "mode", Mode.UNDERWAY, raising=False)
     monkeypatch.setattr(proc.lease, "held", lambda *a, **k: True)

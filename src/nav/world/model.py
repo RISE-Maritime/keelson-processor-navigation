@@ -47,6 +47,8 @@ class World:
         self._requests: list[tuple[dict, int]] = []
         self._helm: tuple[dict | None, int] | None = None
         self._helm_events: list[tuple[str, str]] = []
+        self._gate = None  # (GateMap | None, received_ns): the motion gate's map, as last read
+        self._gate_epoch = None  # (term, generation) on the gate's latest resolved_control
         self.inputs = Latch()
         self.targets = TargetTable()
 
@@ -119,6 +121,23 @@ class World:
     def helm(self) -> tuple[dict | None, int] | None:
         with self._lock:
             return self._helm
+
+    def put_gate(self, gate_map, received_ns: int) -> None:
+        """The motion gate's map in force (guidance/candidates.GateMap); None: nobody answered."""
+        with self._lock:
+            self._gate = (gate_map, received_ns) if gate_map is not None else None
+
+    def gate(self):
+        with self._lock:
+            return self._gate
+
+    def put_gate_epoch(self, epoch: tuple[str, int] | None) -> None:
+        with self._lock:
+            self._gate_epoch = epoch
+
+    def gate_epoch(self) -> tuple[str, int] | None:
+        with self._lock:
+            return self._gate_epoch
 
     def put_helm_event(self, kind: str, detail: str) -> None:
         with self._lock:

@@ -59,3 +59,6 @@ class Actuation:
     axes: tuple[float, float] | None = None  # (steering_pct, throttle_pct)
     valid_until_ns: int = 0
     mapping: str | None = None  # "install" | "release"
+    # Behind a motion gate: the GuidanceCandidates to propose (guidance/candidates.py); None on
+    # the axes backend.
+    candidates: tuple | None = None

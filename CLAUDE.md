@@ -46,6 +46,9 @@ src/nav/
                     Actuation), failsafe, guide (orders + navigation_setpoint)
   log/decision_log.py  navigation_decision append + periodic restatement
   bus/vehicle_control.py  HelmBackend: axis timer and mapping RPCs, the only thing that drives
+  bus/gate_candidates.py  GateBackend (guidance.backend: gate): guidance_candidate per DOF and a
+                    read of the gate's map; it never installs a mapping (crowsnest-dev#94)
+  guidance/candidates.py  each DOF's decision and execution basis behind the gate; pure
   control/          navigation_control/v1: orders (GuidanceOrder), commands (who may call,
                     load_route, voyages), decided in the tick
   bus/control.py    the four queryables: decode, cross-vessel route fetch, queue, wait, encode

@@ -15,7 +15,9 @@ advice (`collision_avoidance`). keelson `protocols/navigation_decisions.yaml` st
 - no document, or the function held by someone else, or held below method 3: never accept. A human
   decides; method 2 confirms each decision.
 - method 3, Delegated: the advice is the intent. A REJECTED disposition is a veto, and the advisor
-  never offers a decided advice again. Inside `valid_from + intervention_window_ms` it waits.
+  never offers a decided advice again. Until the advice has been published it waits: an intent no
+  station could see was not delivered (crowsnest-dev#94). Inside `valid_from +
+  intervention_window_ms` it waits.
   After it, silence lets it accept only if a veto COULD have arrived: the NAVIGATIONAL_COMMAND
   session is live.
   If it is not, `intent_delivery_required` refuses; otherwise `comms_loss_behaviour` decides --
@@ -140,7 +142,12 @@ def held(doc: Document | None, principal: str) -> tuple[Function, ...]:
 
 
 def advice_decision(
-    doc: Document | None, principal: str, now_ns: int, valid_from_ns: int, nav_session_live: bool
+    doc: Document | None,
+    principal: str,
+    now_ns: int,
+    valid_from_ns: int,
+    nav_session_live: bool,
+    delivered: bool = True,
 ) -> Verdict:
     """May this process accept its own undecided COLREG advice now? collision_avoidance's method."""
     if doc is None:
@@ -157,6 +164,8 @@ def advice_decision(
         )
     if f.method > DELEGATED:
         return Verdict(ACCEPT, f"collision_avoidance at method {f.method}")
+    if not delivered:
+        return Verdict(WAIT, "the intent has not been published yet")
     deadline = valid_from_ns + f.envelope.intervention_window_ms * 1_000_000
     if now_ns < deadline:
         left = (deadline - now_ns) / 1e9

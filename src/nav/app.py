@@ -154,9 +154,15 @@ def run(session, conf: dict, stop) -> None:
 
         helm = None
         if processor.guidance is not None:
-            from .bus.vehicle_control import HelmBackend
+            if conf["guidance"]["backend"] == "gate":
+                # Behind the motion gate: candidates, and never a mapping of its own (#94).
+                from .bus.gate_candidates import GateBackend
 
-            helm = HelmBackend(session, conf, processor.world)
+                helm = GateBackend(session, conf, processor.world)
+            else:
+                from .bus.vehicle_control import HelmBackend
+
+                helm = HelmBackend(session, conf, processor.world)
             stack.callback(helm.close)
             helm.start()
 

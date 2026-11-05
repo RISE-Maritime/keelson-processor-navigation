@@ -123,6 +123,39 @@ registers a subject, `codec: proto` publishes it typed with no other change.
 | out | `pubsub/raw_json/navigation/0/guidance`, record `navigation_setpoint` | Course, speed, leg, cross-track error and the axis values behind them |
 | out | `pubsub/raw_json/navigation/0/decision_log`, record `navigation_decision` | Mode changes, conn taken, granted, lost or released, mapping installed or refused, advice accepted. Recent decisions restated every 30 s |
 
+The rpc rows and the joystick row are the default backend, `guidance.backend: axes`, for a vessel
+with no motion gate.
+
+**Behind a motion gate,** with `guidance.backend: gate` (crowsnest-dev#94), the backend never
+installs a mapping:
+
+| Direction | Key under `{realm}/@v0/{entity_id}/` | Notes |
+|---|---|---|
+| rpc | `@rpc/control_gate/v1/get_gate_state/{guidance.gate.responder_id}` | The gate's map in force, read every `mapping_poll_s` and at once on a new motion epoch. Only ever read |
+| in | `pubsub/resolved_control/{entity_id}` | The gate's motion epoch. A new one silences the candidates until a map read under it is in |
+| out | `pubsub/guidance_candidate/navigation/0/guidance/{dof}` | One `GuidanceCandidate` per DOF in `guidance.gate.dofs`, at `publish_hz`. `source` is `navigation/0`, and one stream (a random id per start) rises across every DOF |
+
+Each candidate claims two bases, and the gate checks them independently (I15):
+- **Decision.** It claims NAV_FUNCTION {function, revision} when the function that decides that
+  output is delegated to this process at method 3 or above:
+  - steering is `collision_avoidance` while avoiding and `track_keeping` on the track;
+  - under a course, heading, hold or position order, steering has no function;
+  - throttle is `speed_control`.
+
+  Otherwise it claims HUMAN_ORDER {order_id}, under a human's conn only, with the id that
+  `navigation_state.order_id` publishes (a new id per order taken, or `advice/{id}` for an advice a
+  human accepted). Otherwise it claims nothing for that DOF.
+- **Execution.** It claims DIRECT when the gate's row names this process as the holder, and
+  CARRY_OUT {mapping_id} under a human's conn.
+
+A row whose holder is not the conn holder heard now proposes nothing. That is the polite yield on
+a take-control; the gate's fence is what stops it.
+
+**On the pinned build** (`0.6.0.dev21`), `NavigationState` has neither `order_id` (keelson's
+`feat/navigation-state-order-id`) nor `functions_in_force` (#376). Both are published only when the
+installed SDK has them. Without `order_id` the gate refuses every HUMAN_ORDER, so only a delegated
+function drives through it until the pin moves.
+
 What the state machine guarantees:
 
 - **UNDERWAY** needs a live conn -- the operator's, who has ordered it, or its own -- a level of

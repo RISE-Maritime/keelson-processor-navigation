@@ -54,6 +54,11 @@ class NavigationState:
     guidance_order: dict | None = (
         None  # keelson.GuidanceOrder, protobuf JSON; absent with no voyage
     )
+    # crowsnest-dev#90 / #94, on a keelson build that carries them (None: not on the wire).
+    functions_in_force: tuple[dict, ...] | None = None  # keelson.FunctionAuthority, protobuf JSON
+    navigation_authority_revision: int | None = None
+    order_id: str | None = None  # the human decision in force; absent when there is none
+    ordered_by: str = ""
 
     def to_payload(self) -> dict:
         """Protobuf JSON mapping. Defaults are emitted too: an explicit MODE_IDLE or
@@ -78,4 +83,11 @@ class NavigationState:
             payload["current_leg_from_waypoint_id"] = self.current_leg_from_waypoint_id
         if self.guidance_order is not None:
             payload["guidance_order"] = self.guidance_order
+        if self.functions_in_force is not None:
+            payload["functions_in_force"] = list(self.functions_in_force)
+        if self.navigation_authority_revision is not None:
+            payload["navigation_authority_revision"] = str(self.navigation_authority_revision)
+        if self.order_id is not None:
+            payload["order_id"] = self.order_id
+            payload["ordered_by"] = self.ordered_by
         return payload

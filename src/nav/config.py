@@ -106,8 +106,18 @@ CONDUCT_DEFAULTS = {
     "auto_accept_advice": False,
 }
 
+# guidance.backend: gate (crowsnest-dev#94) -- behind the motion gate. `dofs` names the vessel's
+# motion DOFs, as the gate's map spells them, and which output of guidance drives each (steering or
+# throttle). The map is read every guidance.mapping_poll_s; this backend never installs one.
+GATE_DEFAULTS = {
+    "responder_id": "control-gate",
+    "dofs": {},
+    "clock_quality": "free_running",  # or "synchronised": whether `timestamp` is worth reading
+}
+
 GUIDANCE_DEFAULTS = {
     "backend": "axes",
+    "gate": dict(GATE_DEFAULTS),
     "responder_id": "*",
     "publish_hz": 10.0,
     "command_hold_s": 0.5,
@@ -288,15 +298,19 @@ def _validate_conduct(conf: dict) -> None:
 
 def _validate_guidance(conf: dict) -> None:
     gd = _section(conf, "guidance", GUIDANCE_DEFAULTS)
-    if gd["backend"] != "axes":
+    if gd["backend"] not in ("axes", "gate"):
         raise ConfigError(
-            "guidance.backend must be 'axes' (vehicle_control/v1); vehicle_navigation is Phase 6"
+            "guidance.backend must be 'axes' (vehicle_control/v1) or 'gate' (the motion gate); "
+            "vehicle_navigation is Phase 6"
         )
+    _validate_gate(gd)
     if not isinstance(gd["responder_id"], str) or not gd["responder_id"]:
         raise ConfigError("guidance.responder_id must be a non-empty string")
     if not _positive(gd["publish_hz"]) or not 10 <= gd["publish_hz"] <= 20:
         raise ConfigError("guidance.publish_hz must be 10-20: vehicle_control/v1 requires it")
-    for key in sorted(set(GUIDANCE_DEFAULTS) - {"backend", "responder_id", "full_ahead_sog_knots"}):
+    for key in sorted(
+        set(GUIDANCE_DEFAULTS) - {"backend", "gate", "responder_id", "full_ahead_sog_knots"}
+    ):
         if not _positive(gd[key]):
             raise ConfigError(f"guidance.{key} must be a positive number")
     if gd["command_hold_s"] * gd["publish_hz"] < 2:
@@ -321,6 +335,33 @@ def _validate_guidance(conf: dict) -> None:
                 "guidance.throttle_kp_pct_per_knot * full_ahead_sog_knots / 100 must be below 1: "
                 "a speed loop at gain 1 oscillates on a hull without inertia"
             )
+
+
+def _validate_gate(gd: dict) -> None:
+    from .guidance.candidates import OUTPUTS
+
+    gate = gd["gate"]
+    if not isinstance(gate, dict):
+        raise ConfigError("guidance.gate must be a mapping")
+    unknown = set(gate) - set(GATE_DEFAULTS)
+    if unknown:
+        raise ConfigError(f"unknown guidance.gate setting(s): {sorted(unknown)}")
+    gate = gd["gate"] = {**GATE_DEFAULTS, **gate}
+    if not isinstance(gate["responder_id"], str) or not gate["responder_id"]:
+        raise ConfigError("guidance.gate.responder_id must be a non-empty string")
+    if gate["clock_quality"] not in ("free_running", "synchronised"):
+        raise ConfigError("guidance.gate.clock_quality must be 'free_running' or 'synchronised'")
+    dofs = gate["dofs"]
+    if not isinstance(dofs, dict) or any(
+        not isinstance(k, str) or not k or v not in OUTPUTS for k, v in dofs.items()
+    ):
+        raise ConfigError(
+            f"guidance.gate.dofs maps each DOF the gate names to one of {', '.join(OUTPUTS)}"
+        )
+    if gd["backend"] == "gate" and set(dofs.values()) != set(OUTPUTS):
+        raise ConfigError(
+            "guidance.backend 'gate' needs guidance.gate.dofs to drive both steering and throttle"
+        )
 
 
 def _validate_decision_log(conf: dict) -> None:

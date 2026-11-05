@@ -162,3 +162,8 @@ Threading model: one zenoh session; subscriber callbacks only stamp into the `wo
 - Whether `conduct` may auto-accept advice at `ASSISTED_AUTONOMOUS` or only at `FULL_AUTONOMOUS` (default: assisted ⇒ auto-accept below DANGER, otherwise operator).
 - `task_allocation` precedence questions the ROC framework §21 leaves open.
 - keelson issue: `ControlAxisMapping` carries no authority token (Slipway observes, cannot enforce).
+  Behind a motion gate this no longer applies (`guidance.backend: gate`, crowsnest-dev#94): the
+  gate's map names the holder's lease, and this process never writes the map.
+- Whether a veto could arrive (method 3) is judged by the NAVIGATIONAL_COMMAND session being live
+  and by the advice having been published. keelson has no supervision-channel health subject yet,
+  and the gate publishes none.

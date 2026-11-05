@@ -40,6 +40,16 @@ def _proto_class(subject: str):
     return keelson.get_protobuf_message_class_from_type_name(keelson.get_subject_schema(subject))
 
 
+def has_fields(subject: str, *names: str) -> bool:
+    """Whether the installed SDK's type for `subject` has every one of these fields: what a
+    payload may carry without ParseDict refusing it on an older build."""
+    try:
+        fields = _proto_class(subject).DESCRIPTOR.fields_by_name
+    except (CodecError, ImportError, KeyError):
+        return False
+    return all(n in fields for n in names)
+
+
 def _to_proto_bytes(subject: str, payload: dict) -> bytes:
     from google.protobuf import json_format
 
