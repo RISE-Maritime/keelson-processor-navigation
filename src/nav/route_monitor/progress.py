@@ -38,6 +38,10 @@ class Progress:
     eta_arrival_s: float | None
     deviation_active: bool
     deviation_threshold_m: float
+    # The leg's limit on each side, the fallback applied: the side she is moving TOWARD is the one
+    # a time to limit is measured to (approach.py), which need not be the side she is on.
+    xtd_port_limit_m: float = 0.0
+    xtd_stbd_limit_m: float = 0.0
 
 
 class ProgressTracker:
@@ -86,8 +90,10 @@ class ProgressTracker:
         brg = g.bearing_deg(lat, lon, b.lat, b.lon)
 
         limits = plan.leg(leg)
-        side_limit = limits.xtd_starboard_m if xtd >= 0 else limits.xtd_port_m
-        threshold = side_limit if side_limit is not None else self.cfg.xtd_limit_fallback_m
+        fallback = self.cfg.xtd_limit_fallback_m
+        port_limit = limits.xtd_port_m if limits.xtd_port_m is not None else fallback
+        stbd_limit = limits.xtd_starboard_m if limits.xtd_starboard_m is not None else fallback
+        threshold = stbd_limit if xtd >= 0 else port_limit
 
         eta_next = eta_arrival = None
         usable_sog = (
@@ -111,6 +117,8 @@ class ProgressTracker:
             eta_arrival_s=eta_arrival,
             deviation_active=(not self._arrived) and abs(xtd) > threshold,
             deviation_threshold_m=threshold,
+            xtd_port_limit_m=port_limit,
+            xtd_stbd_limit_m=stbd_limit,
         )
 
     def _capture_m(self, plan: RoutePlan, waypoint_index: int) -> float:

@@ -55,6 +55,8 @@ route_monitor:
   min_sog_for_eta_knots: 0.5
   xtd_limit_fallback_m: 50         # when a leg authors no XTD limit
   deviation_clear_fraction: 0.8    # deviation alarm clears below this fraction of the limit
+  approach_time_s: 60              # CAUTION while the XTD limit is under this many seconds away
+  approach_clear_factor: 1.5       # ...and it clears above this multiple of approach_time_s
   envelope_clear_margin: 0.02      # exceedance closes this fraction inside the limit
   alarms: true
   alarm_republish_s: 5

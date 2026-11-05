@@ -55,7 +55,7 @@ Other entities pass through, and an empty instance is the plain names (`src/nav/
 | in | `location_fix/{source}`, `speed_over_ground_knots/{source}`, … | Sources from `inputs` |
 | out | `route_execution/{voyage_id}` | 1 Hz. For a declared route the token is `declared-{source}` and `voyage_id` is empty |
 | out | `envelope_exceedance/{voyage_id}/{exceedance_id}` | Voyages only. Opened on breach, restated in full on close |
-| out | `alarm/navigation/0/route_monitor` | Deviation, envelope, no position, dangling route. Cleared by publishing an expired alarm |
+| out | `alarm/navigation/0/route_monitor` | Deviation (WARNING), approaching the XTD limit (CAUTION: under `approach_time_s` at the present rate), envelope, no position, dangling route. Cleared by publishing an expired alarm |
 
 ## What traffic reads and writes
 

@@ -156,3 +156,90 @@ def test_alarms_can_be_disabled(declared, monitor_conf):
     assert by_subject(out, "alarm") == [] and "route_monitor" not in {
         m for m, subjects in proc.publications().items() if subjects
     }
+
+
+APPROACH_ID = "route_monitor/route_deviation_approach/declared-sim"
+
+
+def drift(proc, world, plan, start_s, end_s, xtd_at):
+    """Ticks once a second; returns the alarm outputs of each tick, by second."""
+    out = {}
+    for t in range(start_s, end_s + 1):
+        # Re-declared every tick, as a live sim does: an unheard declaration goes stale in 35 s.
+        world.put_declared("sim", plan, T0 + t * S, live=True)
+        feed(world, T0 + t * S, on_leg0(plan, 100.0 + 4.0 * t, xtd_at(t)))
+        out[t] = by_subject(proc.tick(T0 + t * S), "alarm")
+    return out
+
+
+def test_approach_caution_before_the_limit_then_the_warning_past_it(declared):
+    """crowsnest-dev#253: closing on the 50 m starboard limit at 0.5 m/s raises a CAUTION once the
+    limit is under 60 s away (xtd > 20 m), and the deviation WARNING replaces it past the limit."""
+    proc, world, plan = declared
+    alarms = drift(proc, world, plan, 0, 30, lambda t: 0.5 * t)
+    # At 0.5 m/s, 60 s to the 50 m limit is 20 m off the line: second 40. Not yet at second 30.
+    assert APPROACH_ID not in proc.monitor.alarms.active_identifiers
+    alarms = drift(proc, world, plan, 31, 45, lambda t: 0.5 * t)
+    assert APPROACH_ID in proc.monitor.alarms.active_identifiers
+    raised = [a for t in alarms for a in alarms[t] if a.payload["identifier"] == APPROACH_ID]
+    assert raised[0].payload["priority"] == "PRIORITY_CAUTION"
+    assert "starboard cross-track limit (50 m)" in raised[0].payload["description"]
+    # Past the limit: the WARNING stands and the CAUTION stands down.
+    drift(proc, world, plan, 46, 105, lambda t: 0.5 * t)
+    active = proc.monitor.alarms.active_identifiers
+    assert "route_monitor/route_deviation/declared-sim" in active
+    assert APPROACH_ID not in active
+
+
+def test_approach_caution_clears_when_she_turns_away(declared):
+    proc, world, plan = declared
+    drift(proc, world, plan, 0, 45, lambda t: 0.5 * t)
+    assert APPROACH_ID in proc.monitor.alarms.active_identifiers
+    # Back toward the line: no time to a limit, the CAUTION clears.
+    drift(proc, world, plan, 46, 60, lambda t: 22.5 - 0.5 * (t - 45))
+    assert APPROACH_ID not in proc.monitor.alarms.active_identifiers
+
+
+def test_approach_caution_hysteresis(declared):
+    """It holds until the time to the limit is above 1.5 x 60 s, so a rate that eases a little does
+    not flicker it."""
+    proc, world, plan = declared
+    drift(proc, world, plan, 0, 45, lambda t: 0.5 * t)  # 22.5 m, 55 s to go
+    assert APPROACH_ID in proc.monitor.alarms.active_identifiers
+    # Slowing to 0.3 m/s for 10 s, to 25.5 m: 24.5 / 0.3 = 82 s -- above 60, below 90: holds.
+    drift(proc, world, plan, 46, 55, lambda t: 22.5 + 0.3 * (t - 45))
+    assert APPROACH_ID in proc.monitor.alarms.active_identifiers
+    # Slowing to 0.2 m/s for 15 s, to 28.5 m: 21.5 / 0.2 = 108 s -- above 90: clears.
+    drift(proc, world, plan, 56, 70, lambda t: 25.5 + 0.2 * (t - 55))
+    assert APPROACH_ID not in proc.monitor.alarms.active_identifiers
+
+
+def test_no_approach_caution_beside_a_standing_warning(declared):
+    """Back inside the limit but still within the WARNING's hysteresis (above 0.8 x 50 m), and
+    heading out again: the WARNING stands, and a CAUTION beside it would only be noise."""
+    proc, world, plan = declared
+    drift(proc, world, plan, 0, 120, lambda t: 0.5 * t)  # out to 60 m
+    drift(proc, world, plan, 121, 135, lambda t: 60.0 - 1.2 * (t - 120))  # back to 42 m
+    drift(proc, world, plan, 136, 146, lambda t: 42.0 + 0.5 * (t - 135))  # out again, 45.5 m
+    active = proc.monitor.alarms.active_identifiers
+    assert "route_monitor/route_deviation/declared-sim" in active
+    assert APPROACH_ID not in active
+
+
+def test_a_leg_switch_is_not_a_rate(declared):
+    """Holding 30 m to starboard of leg 0 into the turn, then on leg 1's line: the cross-track
+    jumps 30 m -> 0 at the switch. A slope across that jump would read as 3 m/s toward port and
+    raise a CAUTION about a limit she is nowhere near."""
+    proc, world, plan = declared
+    wp1 = plan.waypoints[1]
+    for t in range(0, 31):
+        world.put_declared("sim", plan, T0 + t * S, live=True)
+        # Captured at 970 m (the 30 m radius), so from second 14 she is on leg 1's line.
+        if t < 14:
+            pos = on_leg0(plan, 900.0 + 5.0 * t, 30.0)
+        else:
+            pos = g.destination(wp1.lat, wp1.lon, 90.0, 5.0 * (t - 13))
+        feed(world, T0 + t * S, pos)
+        proc.tick(T0 + t * S)
+        assert APPROACH_ID not in proc.monitor.alarms.active_identifiers, t
+    assert proc.monitor.status.progress.leg_index == 1

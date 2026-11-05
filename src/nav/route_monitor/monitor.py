@@ -11,6 +11,7 @@ from ..world.latch import fresh
 from ..world.model import WorldSnapshot
 from ..world.route import RouteRef
 from .alarms import AlarmManager, AlarmSpec
+from .approach import LateralRate, time_to_limit
 from .envelope import LIMITS, ExceedanceTracker, evaluate
 from .progress import Progress, ProgressConfig, ProgressTracker
 from .select import Selection
@@ -45,6 +46,8 @@ class RouteMonitor:
         self._next_exec_ns: int | None = None
         self._token: str | None = None
         self._deviation_latched = False
+        self._approach_latched = False
+        self._rate = LateralRate()
         self.status = MonitorStatus()
 
     def step(self, world: WorldSnapshot, selection: Selection, now_ns: int) -> list[Emit]:
@@ -63,6 +66,8 @@ class RouteMonitor:
         if token != self._token:
             self._token = token
             self._deviation_latched = False
+            self._approach_latched = False
+            self._rate.reset()
             self._next_exec_ns = None
             if selection.plan is None:
                 self.progress.reset()
@@ -109,6 +114,36 @@ class RouteMonitor:
             wanted_alarms[f"route_monitor/route_deviation/{token}"] = AlarmSpec(
                 f"Cross-track deviation to {side} exceeds {progress.deviation_threshold_m:.0f} m "
                 f"on the leg from waypoint {progress.from_waypoint_id}"
+            )
+
+        # THE EARLY HALF (crowsnest-dev#253): a CAUTION while the limit she is moving toward is
+        # under approach_time_s away. It stands down to the WARNING once she is past it, and clears
+        # with hysteresis (above approach_clear_factor x the time) so a rate near the line does not
+        # flicker it. The rate is per leg: a slope across a leg switch's jump is no rate at all.
+        self._rate.add((plan.route_id, progress.leg_index), position.received_ns, progress.xtd_m)
+        ttl = time_to_limit(
+            progress.xtd_m,
+            self._rate.rate_mps(),
+            progress.xtd_port_limit_m,
+            progress.xtd_stbd_limit_m,
+        )
+        approach_s = self.rm["approach_time_s"]
+        if self._deviation_latched or progress.arrived or ttl is None or ttl <= 0:
+            self._approach_latched = False
+        elif ttl <= approach_s:
+            self._approach_latched = True
+        elif ttl > approach_s * self.rm["approach_clear_factor"]:
+            self._approach_latched = False
+        if self._approach_latched:
+            toward_stbd = (self._rate.rate_mps() or 0) > 0
+            side = "starboard" if toward_stbd else "port"
+            limit = progress.xtd_stbd_limit_m if toward_stbd else progress.xtd_port_limit_m
+            # Stable text, as above: no live seconds, or it republishes every tick.
+            wanted_alarms[f"route_monitor/route_deviation_approach/{token}"] = AlarmSpec(
+                f"Approaching the {side} cross-track limit ({limit:.0f} m): under "
+                f"{approach_s:.0f} s at the present rate, on the leg from waypoint "
+                f"{progress.from_waypoint_id}",
+                priority="PRIORITY_CAUTION",
             )
 
         fresh_env = {

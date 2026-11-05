@@ -53,6 +53,8 @@ ROUTE_MONITOR_DEFAULTS = {
     "min_sog_for_eta_knots": 0.5,
     "xtd_limit_fallback_m": 50.0,
     "deviation_clear_fraction": 0.8,
+    "approach_time_s": 60.0,
+    "approach_clear_factor": 1.5,
     "envelope_clear_margin": 0.02,
     "alarms": True,
     "alarm_republish_s": 5.0,
@@ -395,6 +397,8 @@ def _validate_route_monitor(conf: dict) -> None:
             raise ConfigError(f"route_monitor.{key} must be a positive number")
     if not rm["deviation_clear_fraction"] < 1:
         raise ConfigError("route_monitor.deviation_clear_fraction must be below 1")
+    if not rm["approach_clear_factor"] > 1:
+        raise ConfigError("route_monitor.approach_clear_factor must be above 1")
     if rm["alarm_ttl_s"] <= rm["alarm_republish_s"]:
         raise ConfigError("route_monitor.alarm_ttl_s must exceed alarm_republish_s")
     if rm["execution_hz"] > conf["tick_hz"]:
