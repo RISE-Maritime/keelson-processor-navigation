@@ -15,7 +15,7 @@ def encounter(**kw):
         timestamp=TS,
         encounter_id="e1",
         voyage_id="v1",
-        target=TargetRef("slipway-traffic", "ais", "mmsi_999001001"),
+        target=TargetRef("sim-ais-traffic", "ais", "mmsi_999001001"),
         target_name="NORDIC TRADER",
         range_m=900.0,
         bearing_true_deg=45.0,

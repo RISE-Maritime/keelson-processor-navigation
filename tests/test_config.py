@@ -46,7 +46,7 @@ def test_cli_overrides_defaults():
 
 def test_example_file_loads():
     conf = config_mod.load(ns(config=str(ROOT / "config" / "processor.example.yaml")))
-    assert conf["entity_id"] == "slipway-usv-alpha"
+    assert conf["entity_id"] == "sim-usv-alpha"
     assert conf["modules"]["conduct"] is True
 
 
@@ -155,7 +155,7 @@ def test_traffic_needs_feeds(tmp_path):
     [
         ("{entity: '*', source: ais}", "single literal key chunk"),
         ("{entity: maritimedb, source: 'ais/*'}", "not a pattern"),
-        ("{entity: slipway-traffic, source: truth}", "ground truth"),
+        ("{entity: sim-ais-traffic, source: truth}", "ground truth"),
         ("{entity: maritimedb}", "exactly entity and source"),
     ],
 )

@@ -43,27 +43,27 @@ def test_several_active_voyages_are_refused():
 
 
 def test_voyage_wins_over_declared_route():
-    declared = {"sim": Declared(square_route(route_id="decl"), NOW, True)}
+    declared = {"slipway": Declared(square_route(route_id="decl"), NOW, True)}
     s = select(world([voyage()], [square_route()], declared), NOW, 35)
     assert s.plan.route_id == "r1"
 
 
 def test_paused_voyage_blocks_declared_fallback():
-    declared = {"sim": Declared(square_route(route_id="decl"), NOW, True)}
+    declared = {"slipway": Declared(square_route(route_id="decl"), NOW, True)}
     s = select(world([voyage(status="VOYAGE_STATUS_PAUSED")], [], declared), NOW, 35)
     assert s.plan is None and "PAUSED" in s.reason
 
 
 def test_live_declared_route_is_monitored_without_a_voyage():
-    declared = {"sim": Declared(square_route(route_id="decl"), NOW - 5 * S, True)}
+    declared = {"slipway": Declared(square_route(route_id="decl"), NOW - 5 * S, True)}
     s = select(world(declared=declared), NOW, 35)
-    assert s.plan.route_id == "decl" and s.execution_key_token == "declared-sim"
+    assert s.plan.route_id == "decl" and s.execution_key_token == "declared-slipway"
     assert s.voyage is None
 
 
 @pytest.mark.parametrize("received, live", [(NOW - 40 * S, True), (NOW, False)])
 def test_stale_or_storage_only_declarations_are_ignored(received, live):
-    declared = {"sim": Declared(square_route(), received, live)}
+    declared = {"slipway": Declared(square_route(), received, live)}
     assert select(world(declared=declared), NOW, 35).plan is None
 
 
@@ -74,6 +74,6 @@ def test_unmonitorable_route_is_refused_with_reason():
 
 
 def test_completed_voyages_are_ignored():
-    declared = {"sim": Declared(square_route(route_id="decl"), NOW, True)}
+    declared = {"slipway": Declared(square_route(route_id="decl"), NOW, True)}
     s = select(world([voyage(status="VOYAGE_STATUS_COMPLETED")], [], declared), NOW, 35)
     assert s.plan.route_id == "decl"

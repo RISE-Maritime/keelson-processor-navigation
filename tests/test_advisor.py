@@ -38,7 +38,7 @@ def target(
     k = Kinematics(lat, lon, cog, sog)
     view = TargetView(
         tid,
-        Sample((lat, lon), 0, source_id="slipway-traffic/ais"),
+        Sample((lat, lon), 0, source_id="sim-ais-traffic/ais"),
         cog=Sample(cog, 0),
         sog=Sample(sog, 0),
         heading=Sample(heading, 0) if heading is not None else None,
@@ -71,7 +71,7 @@ def test_crossing_from_starboard_opens_give_way_and_advises_starboard():
     )
     assert (
         enc.source_id == f"voy/{p['encounter_id']}"
-        and p["target"]["entity_id"] == "slipway-traffic"
+        and p["target"]["entity_id"] == "sim-ais-traffic"
     )
     assert "closed_at" not in p
     (adv,) = by("navigation_advice", out)

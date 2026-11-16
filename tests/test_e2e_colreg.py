@@ -79,13 +79,14 @@ def test_typed_encounter_and_inbound_disposition(session, traffic_conf, monkeypa
                 enc("foxglove.LocationFix", latitude=lat, longitude=lon),
             )
             session.put(
-                own("course_over_ground_deg", "sim"), enc("keelson.TimestampedFloat", value=0.0)
+                own("course_over_ground_deg", "slipway"), enc("keelson.TimestampedFloat", value=0.0)
             )
             session.put(
-                own("speed_over_ground_knots", "sim"), enc("keelson.TimestampedFloat", value=10.0)
+                own("speed_over_ground_knots", "slipway"),
+                enc("keelson.TimestampedFloat", value=10.0),
             )
             session.put(
-                own("heading_true_north_deg", "sim"), enc("keelson.TimestampedFloat", value=0.0)
+                own("heading_true_north_deg", "slipway"), enc("keelson.TimestampedFloat", value=0.0)
             )
             # 0.5 NM east, 0.5 NM north, heading west at 10 kn: collision course from starboard.
             session.put(

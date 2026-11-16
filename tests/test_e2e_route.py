@@ -50,14 +50,14 @@ def test_declared_route_produces_route_execution(session, monitor_conf):  # noqa
         deadline = time.monotonic() + 20
         along = 100.0
         while len(received) < 2 and time.monotonic() < deadline:
-            session.put(key("route", "sim"), route_bytes)
+            session.put(key("route", "slipway"), route_bytes)
             lat, lon = g.destination(start.lat, start.lon, 0.0, along)
             fix = cls("foxglove.LocationFix")(latitude=lat, longitude=lon)
             fix.timestamp.FromNanoseconds(time.time_ns())
             session.put(key("location_fix", "gnss"), keelson.enclose(fix.SerializeToString()))
             sog = cls("keelson.TimestampedFloat")(value=8.0)
             session.put(
-                key("speed_over_ground_knots", "sim"), keelson.enclose(sog.SerializeToString())
+                key("speed_over_ground_knots", "slipway"), keelson.enclose(sog.SerializeToString())
             )
             along += 2.0
             time.sleep(0.2)
@@ -74,10 +74,10 @@ def test_declared_route_produces_route_execution(session, monitor_conf):  # noqa
     assert not worker.is_alive()
     assert len(received) >= 2
     exec_key, data = received[-1]
-    assert exec_key == key("route_execution", "declared-sim")
+    assert exec_key == key("route_execution", "declared-slipway")
     _, _, payload = keelson.uncover(data)
     msg = cls("keelson.RouteExecution").FromString(payload)
     assert msg.route_ref.route_id == "r1"
     assert msg.current_leg_from_waypoint_id == "wp0" and msg.next_waypoint_id == "wp1"
     assert abs(msg.xtd_m) < 1.0 and msg.speed_over_ground_knots == pytest.approx(8.0)
-    assert token_keys == [key("route_execution", "declared-sim")]
+    assert token_keys == [key("route_execution", "declared-slipway")]

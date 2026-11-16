@@ -20,8 +20,8 @@ def monitor_conf(conf) -> dict:
     conf["modules"]["route_monitor"] = True
     conf["inputs"] = {
         "location_fix": "gnss",
-        "speed_over_ground_knots": "sim",
-        "course_over_ground_deg": "sim",
+        "speed_over_ground_knots": "slipway",
+        "course_over_ground_deg": "slipway",
         "true_wind_speed_mps": "wx",
     }
     return conf
@@ -30,7 +30,7 @@ def monitor_conf(conf) -> dict:
 @pytest.fixture
 def traffic_conf(monitor_conf) -> dict:
     monitor_conf["modules"]["traffic"] = True
-    monitor_conf["inputs"]["heading_true_north_deg"] = "sim"
+    monitor_conf["inputs"]["heading_true_north_deg"] = "slipway"
     monitor_conf["traffic"]["feeds"] = [{"entity": "nav-test-ais", "source": "ais"}]
     return monitor_conf
 

@@ -61,12 +61,12 @@ def test_samples():
     assert (s.value, s.measured_ns, s.received_ns, s.source_id) == ((57.7, 11.9), 123, 999, "gnss")
 
     sog = cls("keelson.TimestampedFloat")(value=6.5)
-    assert translate.sample(sog, 1, "sim").measured_ns is None
+    assert translate.sample(sog, 1, "slipway").measured_ns is None
     gust = cls("keelson.TimestampedFloatPeriod")(value=14.0)
     assert translate.sample(gust, 1, "wx").value == 14.0
 
     with pytest.raises(translate.TranslateError):
-        translate.sample(cls("keelson.TimestampedFloat")(value=float("nan")), 1, "sim")
+        translate.sample(cls("keelson.TimestampedFloat")(value=float("nan")), 1, "slipway")
 
 
 def test_string_and_nav_status_samples():

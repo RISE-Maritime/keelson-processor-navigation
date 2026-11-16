@@ -69,21 +69,23 @@ def test_edition_payload_must_match_its_key(inputs):
 
 def test_latest_is_ignored_and_declaration_is_kept(inputs):
     inputs._on_route(sample(f"{BASE}/route/r1/latest", route_msg()), live=True)
-    inputs._on_route(sample(f"{BASE}/route/sim", route_msg("decl")), live=False)
+    inputs._on_route(sample(f"{BASE}/route/slipway", route_msg("decl")), live=False)
     snap = inputs.world.snapshot()
     assert snap.editions == {}
-    assert snap.declared["sim"].plan.route_id == "decl" and snap.declared["sim"].live is False
+    assert (
+        snap.declared["slipway"].plan.route_id == "decl" and snap.declared["slipway"].live is False
+    )
 
 
 def test_storage_reply_never_overrides_a_live_declaration(inputs):
-    inputs._on_route(sample(f"{BASE}/route/sim", route_msg("live")), live=True)
-    inputs._on_route(sample(f"{BASE}/route/sim", route_msg("stored")), live=False)
-    assert inputs.world.snapshot().declared["sim"].plan.route_id == "live"
+    inputs._on_route(sample(f"{BASE}/route/slipway", route_msg("live")), live=True)
+    inputs._on_route(sample(f"{BASE}/route/slipway", route_msg("stored")), live=False)
+    assert inputs.world.snapshot().declared["slipway"].plan.route_id == "live"
 
 
 def test_declared_routes_can_be_turned_off(inputs):
     inputs.conf["route_monitor"]["monitor_declared_route"] = False
-    inputs._on_route(sample(f"{BASE}/route/sim", route_msg()), live=True)
+    inputs._on_route(sample(f"{BASE}/route/slipway", route_msg()), live=True)
     assert inputs.world.snapshot().declared == {}
 
 

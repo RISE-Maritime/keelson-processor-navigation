@@ -41,8 +41,8 @@ There is no default `entity_id`, and each input names its `source_id` explicitly
 processor refuses to start without them, and refuses simulator `truth` sources.
 
 **Under a Slipway instance** (Slipway ADR-0139), keep the authored names in the file and pass
-`--slipway-instance <i>` (or `slipway_instance:`): `slipway-usv-alpha` is then navigated as
-`slipway-<i>-usv-alpha` and a `slipway-ais-traffic` feed is read from `slipway-<i>-ais-traffic`.
+`--slipway-instance <i>` (or `slipway_instance:`): `sim-usv-alpha` is then navigated as
+`sim-<i>-usv-alpha` and a `sim-ais-traffic` feed is read from `sim-<i>-ais-traffic`.
 Other entities pass through, and an empty instance is the plain names (`src/nav/instance.py`).
 
 ## What route monitoring reads and writes
@@ -79,7 +79,7 @@ dead-reckoned from receipt to now; set `traffic.dead_reckon: false` to match Cro
 Watch it:
 
 ```bash
-z_sub -e tcp/localhost:7447 -k 'rise/@v0/slipway-usv-alpha/pubsub/raw_json/navigation/**'
+z_sub -e tcp/localhost:7447 -k 'rise/@v0/sim-usv-alpha/pubsub/raw_json/navigation/**'
 ```
 
 ## What the COLREG advisor publishes
@@ -280,8 +280,8 @@ must not share a vessel with `keelson-processor-autopilot`, which re-installs it
 the helm is free. Stop the autopilot container on any vessel this processor steers. Monitoring,
 traffic, advice and conduct without guidance are safe beside it: they command nothing.
 
-[config/slipway-usv-alpha-guidance.yaml](config/slipway-usv-alpha-guidance.yaml) sails Slipway's
-`slipway-usv-alpha` on scenario `alpha-navigation`. It fixes the authority level because Slipway runs no
+[config/sim-usv-alpha-guidance.yaml](config/sim-usv-alpha-guidance.yaml) sails Slipway's
+`sim-usv-alpha` on scenario `alpha-navigation`. It fixes the authority level because Slipway runs no
 authority aggregator, which is acceptable in simulation only.
 
 ## Acceptance against Slipway

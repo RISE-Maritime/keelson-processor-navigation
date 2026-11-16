@@ -49,10 +49,11 @@ def test_target_cpa_is_published_under_target(session, traffic_conf):  # noqa: F
                 enc("foxglove.LocationFix", latitude=lat, longitude=lon),
             )
             session.put(
-                own("course_over_ground_deg", "sim"), enc("keelson.TimestampedFloat", value=0.0)
+                own("course_over_ground_deg", "slipway"), enc("keelson.TimestampedFloat", value=0.0)
             )
             session.put(
-                own("speed_over_ground_knots", "sim"), enc("keelson.TimestampedFloat", value=10.0)
+                own("speed_over_ground_knots", "slipway"),
+                enc("keelson.TimestampedFloat", value=10.0),
             )
             session.put(
                 ais("location_fix"),

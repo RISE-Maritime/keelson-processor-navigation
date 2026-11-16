@@ -26,9 +26,9 @@ def guidance_conf(conf):
     conf["modules"].update(route_monitor=True, guidance=True, decision_log=True)
     conf["inputs"] = {
         "location_fix": "gnss",
-        "heading_true_north_deg": "sim",
-        "course_over_ground_deg": "sim",
-        "speed_over_ground_knots": "sim",
+        "heading_true_north_deg": "slipway",
+        "course_over_ground_deg": "slipway",
+        "speed_over_ground_knots": "slipway",
     }
     conf["conduct"].update(
         take_conn_when_free=True, fixed_authority_level="AUTHORITY_LEVEL_REMOTE_CONTROLLED"
@@ -52,7 +52,7 @@ class Rig:
 
     def tick(self, fresh_inputs=True):
         w = self.p.world
-        w.put_declared("sim", self.plan, self.now, live=True)
+        w.put_declared("slipway", self.plan, self.now, live=True)
         w.put_helm(self.mapping, self.now)
         if fresh_inputs:
             for subject, value in (

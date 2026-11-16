@@ -12,8 +12,8 @@ from nav.conduct.state import Mode, SubMode
 pytestmark = pytest.mark.unit
 
 GOOD = Gates(
-    route="declared-sim",
-    route_reason="monitoring declared route from source sim",
+    route="declared-slipway",
+    route_reason="monitoring declared route from source slipway",
     guidance=True,
     conn_held=True,
     conn_token="t1",

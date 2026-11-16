@@ -45,11 +45,11 @@ def _replay(colreg_active: bool = True):
     conf["modules"].update(traffic=True, colreg=True, conduct=False)
     conf["inputs"] = {
         "location_fix": "gnss",
-        "course_over_ground_deg": "sim",
-        "speed_over_ground_knots": "sim",
-        "heading_true_north_deg": "sim",
+        "course_over_ground_deg": "slipway",
+        "speed_over_ground_knots": "slipway",
+        "heading_true_north_deg": "slipway",
     }
-    conf["traffic"]["feeds"] = [{"entity": "slipway-traffic", "source": "ais"}]
+    conf["traffic"]["feeds"] = [{"entity": "sim-ais-traffic", "source": "ais"}]
     ids = count(1)
     proc = Processor(conf, World(), id_factory=lambda: f"id{next(ids)}")
     proc.colreg_active = colreg_active  # set_settings colreg_advisor_active (keelson#322)
@@ -58,16 +58,16 @@ def _replay(colreg_active: bool = True):
     for line in FIXTURE.read_text().splitlines():
         row = json.loads(line)
         now = T0 + int(row["t_s"] * S)
-        a = row["vessels"]["slipway-alpha"]
+        a = row["vessels"]["sim-usv-alpha"]
         w = proc.world
         w.inputs.put("location_fix", Sample((a["lat"], a["lon"]), now))
         w.inputs.put("course_over_ground_deg", Sample(a["heading_deg"], now))  # L0, no current
         w.inputs.put("speed_over_ground_knots", Sample(a["sog_knots"], now))
         w.inputs.put("heading_true_north_deg", Sample(a["heading_deg"], now))
-        targets = {"mmsi_bravo": (row["vessels"]["slipway-bravo"], "VESSEL BRAVO")}
+        targets = {"mmsi_bravo": (row["vessels"]["sim-workboat-bravo"], "VESSEL BRAVO")}
         targets |= {tid: (t, "TARGET 1") for tid, t in row["targets"].items()}
         for tid, (t, name) in targets.items():
-            src = "slipway-traffic/ais"
+            src = "sim-ais-traffic/ais"
             w.targets.put(tid, "location_fix", Sample((t["lat"], t["lon"]), now, source_id=src))
             w.targets.put(
                 tid, "course_over_ground_deg", Sample(t["heading_deg"], now, source_id=src)
@@ -124,9 +124,9 @@ def test_first_advice_is_a_starboard_alteration_that_clears_bravo(run):
     # Recomputed independently from the fixture at the advice's own second: Bravo is cleared to
     # the RISK distance, and any other target in the fixture stays outside DANGER.
     row = next(json.loads(x) for x in FIXTURE.read_text().splitlines() if json.loads(x)["t_s"] == t)
-    a = row["vessels"]["slipway-alpha"]
+    a = row["vessels"]["sim-usv-alpha"]
     own_after = Kinematics(a["lat"], a["lon"], course, a["sog_knots"])
-    b = row["vessels"]["slipway-bravo"]
+    b = row["vessels"]["sim-workboat-bravo"]
     bravo = geometry(own_after, Kinematics(b["lat"], b["lon"], b["heading_deg"], b["sog_knots"]))
     assert bravo.cpa_m >= RISK_CPA_M
     for tgt in row["targets"].values():

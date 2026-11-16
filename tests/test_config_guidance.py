@@ -12,9 +12,9 @@ def gconf(conf):
     conf["modules"].update(guidance=True, route_monitor=True, decision_log=True)
     conf["inputs"] = {
         "location_fix": "gnss",
-        "heading_true_north_deg": "sim",
-        "course_over_ground_deg": "sim",
-        "speed_over_ground_knots": "sim",
+        "heading_true_north_deg": "slipway",
+        "course_over_ground_deg": "slipway",
+        "speed_over_ground_knots": "slipway",
     }
     conf["guidance"]["full_ahead_sog_knots"] = 20.5
     return conf

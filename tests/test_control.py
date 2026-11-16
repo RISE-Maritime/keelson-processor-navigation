@@ -37,9 +37,9 @@ def control_conf(conf):
     conf["modules"].update(route_monitor=True, guidance=True, decision_log=True, control=True)
     conf["inputs"] = {
         "location_fix": "gnss",
-        "heading_true_north_deg": "sim",
-        "course_over_ground_deg": "sim",
-        "speed_over_ground_knots": "sim",
+        "heading_true_north_deg": "slipway",
+        "course_over_ground_deg": "slipway",
+        "speed_over_ground_knots": "slipway",
     }
     conf["conduct"]["fixed_authority_level"] = "AUTHORITY_LEVEL_REMOTE_CONTROLLED"
     conf["guidance"].update(full_ahead_sog_knots=20.0)

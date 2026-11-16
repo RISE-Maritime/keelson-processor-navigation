@@ -44,7 +44,7 @@ def parse(type_name, payload):
 def declared(monitor_conf):
     world = World()
     plan = square_route(leg=LegLimits(xtd_port_m=50.0, xtd_starboard_m=50.0))
-    world.put_declared("sim", plan, T0, live=True)
+    world.put_declared("slipway", plan, T0, live=True)
     return Processor(monitor_conf, world, id_factory=lambda: "ex-1"), world, plan
 
 
@@ -54,7 +54,7 @@ def test_declared_route_execution_deviation_alarm_and_state(declared):
     out = proc.tick(T0)
 
     (execution,) = by_subject(out, "route_execution")
-    assert execution.source_id == "declared-sim"
+    assert execution.source_id == "declared-slipway"
     msg = parse("keelson.RouteExecution", execution.payload)
     assert msg.route_ref.route_id == "r1" and msg.voyage_id == ""
     assert (msg.current_leg_from_waypoint_id, msg.next_waypoint_id) == ("wp0", "wp1")
@@ -62,12 +62,12 @@ def test_declared_route_execution_deviation_alarm_and_state(declared):
     assert msg.eta_next_waypoint.ToNanoseconds() > T0
 
     (alarm,) = by_subject(out, "alarm")
-    assert alarm.payload["identifier"] == "route_monitor/route_deviation/declared-sim"
+    assert alarm.payload["identifier"] == "route_monitor/route_deviation/declared-slipway"
     (state,) = by_subject(out, "navigation_state")
     assert state.payload["mode"] == "MODE_READY"
     assert state.payload["route_ref"] == {"route_id": "r1", "route_edition_number": 1}
     assert state.payload["current_leg_from_waypoint_id"] == "wp0"
-    assert proc.dynamic_keys() == {("route_execution", "declared-sim")}
+    assert proc.dynamic_keys() == {("route_execution", "declared-slipway")}
 
     # 10 Hz tick, 1 Hz execution.
     feed(world, T0 + S // 10, on_leg0(plan, 402.0, 45.0))
@@ -89,7 +89,9 @@ def test_hysteresis_keeps_the_alarm_between_clear_fraction_and_limit(declared):
     for i in range(1, 10):
         feed(world, T0 + i * S // 10, on_leg0(plan, 400.0 + i, 45.0 + i))
         assert by_subject(proc.tick(T0 + i * S // 10), "alarm") == []
-    assert proc.monitor.alarms.active_identifiers == {"route_monitor/route_deviation/declared-sim"}
+    assert proc.monitor.alarms.active_identifiers == {
+        "route_monitor/route_deviation/declared-slipway"
+    }
 
 
 def test_stale_position_stops_execution_and_degrades(declared):
@@ -99,7 +101,7 @@ def test_stale_position_stops_execution_and_degrades(declared):
     out = proc.tick(T0 + 10 * S)
     assert by_subject(out, "route_execution") == []
     (alarm,) = by_subject(out, "alarm")
-    assert alarm.payload["identifier"] == "route_monitor/no_position/declared-sim"
+    assert alarm.payload["identifier"] == "route_monitor/no_position/declared-slipway"
     (state,) = by_subject(out, "navigation_state")
     assert state.payload["degraded_inputs"] == ["location_fix", "speed_over_ground_knots"]
     assert proc.dynamic_keys() == set()
@@ -158,7 +160,7 @@ def test_alarms_can_be_disabled(declared, monitor_conf):
     }
 
 
-APPROACH_ID = "route_monitor/route_deviation_approach/declared-sim"
+APPROACH_ID = "route_monitor/route_deviation_approach/declared-slipway"
 
 
 def drift(proc, world, plan, start_s, end_s, xtd_at):
@@ -166,7 +168,7 @@ def drift(proc, world, plan, start_s, end_s, xtd_at):
     out = {}
     for t in range(start_s, end_s + 1):
         # Re-declared every tick, as a live sim does: an unheard declaration goes stale in 35 s.
-        world.put_declared("sim", plan, T0 + t * S, live=True)
+        world.put_declared("slipway", plan, T0 + t * S, live=True)
         feed(world, T0 + t * S, on_leg0(plan, 100.0 + 4.0 * t, xtd_at(t)))
         out[t] = by_subject(proc.tick(T0 + t * S), "alarm")
     return out
@@ -187,7 +189,7 @@ def test_approach_caution_before_the_limit_then_the_warning_past_it(declared):
     # Past the limit: the WARNING stands and the CAUTION stands down.
     drift(proc, world, plan, 46, 105, lambda t: 0.5 * t)
     active = proc.monitor.alarms.active_identifiers
-    assert "route_monitor/route_deviation/declared-sim" in active
+    assert "route_monitor/route_deviation/declared-slipway" in active
     assert APPROACH_ID not in active
 
 
@@ -222,7 +224,7 @@ def test_no_approach_caution_beside_a_standing_warning(declared):
     drift(proc, world, plan, 121, 135, lambda t: 60.0 - 1.2 * (t - 120))  # back to 42 m
     drift(proc, world, plan, 136, 146, lambda t: 42.0 + 0.5 * (t - 135))  # out again, 45.5 m
     active = proc.monitor.alarms.active_identifiers
-    assert "route_monitor/route_deviation/declared-sim" in active
+    assert "route_monitor/route_deviation/declared-slipway" in active
     assert APPROACH_ID not in active
 
 
@@ -233,7 +235,7 @@ def test_a_leg_switch_is_not_a_rate(declared):
     proc, world, plan = declared
     wp1 = plan.waypoints[1]
     for t in range(0, 31):
-        world.put_declared("sim", plan, T0 + t * S, live=True)
+        world.put_declared("slipway", plan, T0 + t * S, live=True)
         # Captured at 970 m (the 30 m radius), so from second 14 she is on leg 1's line.
         if t < 14:
             pos = on_leg0(plan, 900.0 + 5.0 * t, 30.0)

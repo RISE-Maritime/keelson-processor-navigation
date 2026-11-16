@@ -43,8 +43,8 @@ Built (`aee6787`). Guidance replaces `keelson-processor-autopilot` on any vessel
 
 Slipway scenario `alpha-navigation` is on Slipway's local `main` (`23e97f5`), not pushed.
 
-Deployed as a keelson-platforms platform service for `slipway-usv-alpha`
-(`platforms/slipway-usv-alpha/docker-compose.navigation.yml`), **with guidance on since 2026-09-28**
+Deployed as a keelson-platforms platform service for `sim-usv-alpha`
+(`platforms/sim-usv-alpha/docker-compose.navigation.yml`), **with guidance on since 2026-09-28**
 (keelson-platforms `5079f53`). The autopilot container is removed and its stale axis mapping cleared.
 The conn is given, never taken (`take_conn_when_free: false`); live, it sits READY with "conn not
 held, and the conn holder has given no order" until the operator holding the conn orders it, and it
@@ -94,7 +94,7 @@ then back on track within 5 m after `track{}`.
   `route_id`; does `Caller` move to a common file.
 - [ ] Slipway calls it at tick 0 (a scenario `vessels[].navigation` block, Slipway ADR-0093):
   `load_route` as the permitted controller `slipway` while the conn is free, then this processor
-  takes the free conn (`take_conn_when_free`). `config/slipway-usv-alpha-guidance.yaml` lists it.
+  takes the free conn (`take_conn_when_free`). `config/sim-usv-alpha-guidance.yaml` lists it.
 - [ ] Crowsnest calls it: voyage buttons, "Load on vessel…", and the Track/Course/Heading/Hold
   control, pinned to the same `0.6.0-alpha.282.dev.2`.
 - [ ] `navigation_state` still rides `raw_json` although keelson types it

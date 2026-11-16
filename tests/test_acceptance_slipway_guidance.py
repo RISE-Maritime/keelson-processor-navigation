@@ -1,4 +1,4 @@
-"""Acceptance: guidance sails Slipway's slipway-usv-alpha in COMMANDED mode, in-process.
+"""Acceptance: guidance sails Slipway's sim-usv-alpha in COMMANDED mode, in-process.
 
 Slipway's kernel runs two-vessel-harbor with alpha handed to vehicle_control; the processor gets
 her operational-plane values each tick and its axes are posted to the kernel's command mailbox,
@@ -43,7 +43,7 @@ from nav.world.route import RoutePlan, WaypointPlan  # noqa: E402
 
 SLIPWAY = Path(__file__).resolve().parents[2] / "SLIPWAY"
 SCENARIO = SLIPWAY / "scenarios" / "two-vessel-harbor.yaml"
-ALPHA = "slipway-usv-alpha"
+ALPHA = "sim-usv-alpha"
 OPERATOR = {"controller_id": "roc@ROC-1", "authority_token": "roc-lease"}
 EPOCH = 1_700_000_000 * 10**9
 S = 10**9
@@ -62,7 +62,7 @@ def nav_conf() -> dict:
     c = copy.deepcopy(config_mod.DEFAULTS)
     c["entity_id"] = ALPHA
     c["modules"].update(route_monitor=True, guidance=True, decision_log=True, control=True)
-    c["inputs"] = {"location_fix": "gnss", **{s: "sim" for s in FLOATS}}
+    c["inputs"] = {"location_fix": "gnss", **{s: "slipway" for s in FLOATS}}
     c["conduct"].update(fixed_authority_level="AUTHORITY_LEVEL_REMOTE_CONTROLLED")
     c["guidance"].update(full_ahead_sog_knots=20.5)
     config_mod._validate(c)

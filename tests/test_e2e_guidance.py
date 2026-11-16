@@ -28,9 +28,9 @@ def test_guidance_maps_the_helm_drives_and_goes_silent_when_the_lease_is_pulled(
     conf["modules"].update(route_monitor=True, guidance=True, decision_log=True)
     conf["inputs"] = {
         "location_fix": "gnss",
-        "heading_true_north_deg": "sim",
-        "course_over_ground_deg": "sim",
-        "speed_over_ground_knots": "sim",
+        "heading_true_north_deg": "slipway",
+        "course_over_ground_deg": "slipway",
+        "speed_over_ground_knots": "slipway",
     }
     conf["conduct"].update(
         take_conn_when_free=True, fixed_authority_level="AUTHORITY_LEVEL_REMOTE_CONTROLLED"
@@ -56,7 +56,9 @@ def test_guidance_maps_the_helm_drives_and_goes_silent_when_the_lease_is_pulled(
         query.reply(query.key_expr, ControlAxisMappingAck().SerializeToString())
 
     def rpc(procedure):
-        return keelson.construct_rpc_key(realm, entity, "vehicle_control", "v1", procedure, "sim")
+        return keelson.construct_rpc_key(
+            realm, entity, "vehicle_control", "v1", procedure, "slipway"
+        )
 
     queryables = [
         session.declare_queryable(rpc("get_control_mapping"), on_get),
@@ -103,7 +105,7 @@ def test_guidance_maps_the_helm_drives_and_goes_silent_when_the_lease_is_pulled(
 
     def feed():
         nonlocal along
-        session.put(key("route", "sim"), route_bytes)
+        session.put(key("route", "slipway"), route_bytes)
         lat, lon = g.destination(start.lat, start.lon, 0.0, along)
         fix = cls("foxglove.LocationFix")(latitude=lat, longitude=lon)
         fix.timestamp.FromNanoseconds(time.time_ns())
@@ -114,7 +116,7 @@ def test_guidance_maps_the_helm_drives_and_goes_silent_when_the_lease_is_pulled(
             ("speed_over_ground_knots", 8.0),
         ):
             msg = float_cls(value=value)
-            session.put(key(subject, "sim"), keelson.enclose(msg.SerializeToString()))
+            session.put(key(subject, "slipway"), keelson.enclose(msg.SerializeToString()))
         along += 1.0
 
     pulled_at = None
