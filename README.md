@@ -1,6 +1,6 @@
 # keelson-processor-navigation
 
-A [keelson](https://github.com/RISE-Maritime/keelson) processor that owns navigation of an
+**Navigator – Autonomous Navigation System (ANS).** A [keelson](https://github.com/RISE-Maritime/keelson) processor that owns navigation of an
 autonomous vessel (MASS, USV) while it is under automation.
 
 > **Status: Phase 4, guidance and conduct.** It monitors the vessel's route, tracks traffic with

@@ -1,7 +1,7 @@
 """The XTD limits WHERE THE SHIP IS, from a VARIABLE corridor's boundaries (crowsnest-dev#287).
 
 A drawn corridor can be far narrower at the ship than its widest on the leg, or far wider than its
-narrowest. Judging the deviation and the approach against the leg's one number made the navigator
+narrowest. Judging the deviation and the approach against the leg's one number made the ANS
 and Crowsnest disagree at exactly those places: PASSAGE showed her outside while this monitor was
 silent. So the limits are the corridor at the ship's abeam point, the same rule as Crowsnest's
 crossTrackPicture.limitsAtShip / crossingAbeam:

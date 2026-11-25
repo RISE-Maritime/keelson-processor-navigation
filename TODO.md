@@ -78,7 +78,7 @@ then back on track within 5 m after `track{}`.
   the voyage changing, and only a new order re-arms it. No COLREG auto-accept under an operator's
   conn. keelson#282's text says the same (`navigation_conduct.yaml`, local commit on
   `feat/navigation-control-interface`, not pushed). Slipway acceptance: STBD 25 m held at 22.9 ..
-  24.0 m with the lease never the navigator's; the lease left to lapse is FALLBACK and she stops.
+  24.0 m with the lease never the ANS's; the lease left to lapse is FALLBACK and she stops.
 - [x] Mismatch with #282 on READY vs FALLBACK when the conn goes elsewhere: resolved with the text
   change above -- the protocol now says the process stands down to FALLBACK (neutral burst, then
   silence), which is what this process does.
@@ -87,7 +87,7 @@ then back on track within 5 m after `track{}`.
 - [ ] keelson `NavigationDecision.Kind` has no settings kind, so a `set_settings` change is logged
   as `KIND_GUIDANCE_ORDER` with a "settings: …" summary. Propose `KIND_SETTINGS_CHANGED` upstream.
 - [ ] A paused COLREG advisor (`set_settings`) keeps the `advice_disposition` liveliness declared at
-  start; and a navigator started without the advisor cannot turn it on at runtime (`fixed`).
+  start; and an ANS started without the advisor cannot turn it on at runtime (`fixed`).
   Repin to the first `0.6.0-pre.N` carrying all three once they merge.
 - [ ] Repin keelson to the `0.6.0-pre.N` that carries #282 once it merges, and answer its three
   review questions: is `hold` an order or only FALLBACK's; does a cross-vessel copy keep its
@@ -101,7 +101,7 @@ then back on track within 5 m after `track{}`.
   (`test_riders.py` fails on exactly that, before this work too). Retiring the four riders moves
   encounter and advice keys and the disposition input, so it is its own change.
 
-- [ ] **Live run on the RISE bus**: the deployed navigator is ready for it (guidance on, autopilot gone, mapping free). Load Slipway `alpha-navigation` (or set alpha commanded), take the conn in Crowsnest and KEEP it, load her route and order a track offset / go-to through navigation/0 (Crowsnest's orders-via-navigator change, plan §3). Needs a person: it commands a vessel on the shared router
+- [ ] **Live run on the RISE bus**: the deployed ANS is ready for it (guidance on, autopilot gone, mapping free). Load Slipway `alpha-navigation` (or set alpha commanded), take the conn in Crowsnest and KEEP it, load her route and order a track offset / go-to through navigation/0 (Crowsnest's orders-via-ANS change, plan §3). Needs a person: it commands a vessel on the shared router
 - [ ] Slipway capability probes take a single-chunk `source_id` (`scenario.schema.json`: `^[a-z0-9][a-z0-9_-]*$`), so `alpha-navigation` cannot require the processor before the clock moves the way `alpha-autopilot` requires its autopilot. Ask Slipway to accept keelson's multi-chunk source ids
 - [ ] Add `NavigationSetpoint` and `NavigationDecision` to RISE-Maritime/keelson#260 (drafts in `docs/upstream/`, text in `docs/UPSTREAM-ASKS.md`). Needs a person: it pushes to GitHub
 - [ ] Speed policy: no UKC slow-down (no depth input is read yet) and no ETA hold
