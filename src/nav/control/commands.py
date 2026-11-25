@@ -304,10 +304,14 @@ class Controller:
         if order.kind is not Kind.TRACK and not ctx.guidance:
             return Outcome(UNSUPPORTED, "guidance is disabled here: only a track order is held")
         active = [v for v in ctx.voyages.values() if v.status == ACTIVE]
-        if len(active) != 1:
+        # A TRACK order follows a route, so it needs the one ACTIVE voyage that names it. Any other
+        # order -- course, heading, hold, go_to, loiter -- steers by her own sensors and needs no
+        # route: with no voyage it is taken alone, and lapses when a voyage starts (runtime
+        # _expire_order). Two ACTIVE voyages are ambiguous for every order (Ted, 2026-11-25).
+        if len(active) > 1 or (order.kind is Kind.TRACK and len(active) != 1):
             return Outcome(TEMPORARILY_REJECTED, "no single ACTIVE voyage to steer")
         if order.resume_from_waypoint_id is not None:
-            ref = active[0].route_ref
+            ref = active[0].route_ref if active else None
             plan = ctx.editions.get((ref.route_id, ref.edition)) if ref is not None else None
             if plan is None or plan.index_of(order.resume_from_waypoint_id) is None:
                 return Outcome(
@@ -315,10 +319,12 @@ class Controller:
                     f"waypoint {order.resume_from_waypoint_id} is not on the active route",
                 )
         summary = f"order {order.describe()} ({controller})"
+        if not active:
+            summary += "; no voyage: it lapses when one starts"
         return Outcome(
             ACCEPTED,
             summary,
-            active[0].voyage_id,
+            active[0].voyage_id if active else None,
             order,
             decisions=[("KIND_GUIDANCE_ORDER", summary)],
         )

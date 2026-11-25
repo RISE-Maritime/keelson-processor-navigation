@@ -881,3 +881,93 @@ def test_no_advice_is_auto_accepted_under_an_operators_conn(control_conf):
 
     rig.p.advisor = Advisor()
     assert rig.p._auto_accept(rig.now) == []
+
+
+# -- orders with no voyage (Ted, 2026-11-25) --------------------------------------------------
+# A course, heading, hold, go_to or loiter order steers by her own sensors and needs no route:
+# with no voyage it is taken alone, carried out under the conn holder's conn, and lapses when a
+# voyage starts. A TRACK order still needs the one ACTIVE voyage that names its route.
+
+
+def _alone(conf, order) -> tuple[Rig, object]:
+    rig = Rig(conf)
+    rig.lease(OPERATOR, "op-1")
+    rig.run(0.5)
+    assert rig.p.selection.voyage is None
+    p = rig.call("set_guidance_order", {"caller": caller(OPERATOR, token="op-1"), "order": order})
+    rig.run(1.0)
+    return rig, p
+
+
+def test_a_heading_order_with_no_voyage_is_taken_and_carried_out(control_conf):
+    rig, p = _alone(control_conf, {"heading_deg": 90.0, "speed_knots": 5.0})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    assert "no voyage" in p.response["detail"]
+    assert rig.p.order.kind is Kind.HEADING
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+    assert "carrying out the order of ted@roc1" in rig.p.conduct.reason
+    assert not rig.p.conn_held, "the conn stays the operator's"
+    setpoint = rig.published("navigation_setpoint")[-1].payload
+    assert setpoint["purpose"] == "PURPOSE_STEERING" and setpoint["steering"] == {"heading_deg": 90.0}
+    assert rig.p.actuation.axes is not None and rig.p.actuation.axes[0] > 0  # turning to 090
+    rig.run(5.0)
+    assert rig.p.order.kind is Kind.HEADING, "an order with no voyage is kept while none starts"
+    assert rig.p.conduct.mode is Mode.UNDERWAY
+
+
+def test_an_order_with_no_voyage_and_no_speed_takes_the_default_not_a_route_speed(control_conf):
+    rig, p = _alone(control_conf, {"course_over_ground_deg": 45.0})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED"
+    sp = rig.published("navigation_setpoint")[-1].payload
+    assert sp["purpose"] == "PURPOSE_STEERING"
+    # A course order holds the speed she has (8 kn in the rig), as it does on a route.
+    assert sp["reason"] == "holding the speed she has under a course or heading order"
+    assert abs(sp["propulsion"]["sog_mps"] - 8.0 * 0.514444) < 0.01
+
+
+def test_a_go_to_from_a_standstill_with_no_voyage_takes_the_default_speed(control_conf):
+    rig = Rig(control_conf)
+    rig.sog = 0.0
+    rig.lease(OPERATOR, "op-1")
+    rig.run(0.5)
+    p = rig.call("set_guidance_order", {"caller": caller(OPERATOR, token="op-1"), "order": _go_to(57.71, 11.95)})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    sp = rig.published("navigation_setpoint")[-1].payload
+    assert "from a standstill: the default speed" in sp["reason"]
+
+
+def test_an_order_with_no_voyage_lapses_when_a_voyage_starts(control_conf):
+    rig, _ = _alone(control_conf, {"heading_deg": 90.0})
+    assert rig.p.order.kind is Kind.HEADING
+    p = rig.call("load_route", load(caller=caller(OPERATOR, token="op-1")))
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(0.5)
+    assert rig.p.order.kind is Kind.TRACK, "a heading given with no voyage never steers the next"
+
+
+def test_an_order_with_no_voyage_stands_down_when_the_lease_lapses(control_conf):
+    rig, _ = _alone(control_conf, {"heading_deg": 90.0})
+    rig.p.world.put_lease({"token": "op-1", "released": True}, rig.now)
+    rig.run(0.5)
+    assert rig.p.conduct.mode is Mode.FALLBACK, rig.p.conduct.reason
+    assert "lease lapsed" in rig.p.conduct.reason
+
+
+def test_a_track_order_still_needs_a_voyage(control_conf):
+    rig, p = _alone(control_conf, {"track": {}})
+    assert p.response["result"] == "COMMAND_RESULT_TEMPORARILY_REJECTED"
+    assert p.response["detail"] == "no single ACTIVE voyage to steer"
+    assert rig.p.conduct.mode is not Mode.UNDERWAY
+
+
+def test_two_active_voyages_refuse_every_order(control_conf):
+    from nav.world.route import RouteRef, VoyagePlan
+
+    rig = Rig(control_conf)
+    rig.lease(OPERATOR, "op-1")
+    for vid in ("voy-a", "voy-b"):
+        rig.p.world.put_voyage(VoyagePlan(vid, "VOYAGE_STATUS_ACTIVE", RouteRef("r1", 1)), {"voyage_id": vid})
+    rig.run(0.5)
+    p = rig.call("set_guidance_order", {"caller": caller(OPERATOR, token="op-1"), "order": {"heading_deg": 90.0}})
+    assert p.response["result"] == "COMMAND_RESULT_TEMPORARILY_REJECTED"

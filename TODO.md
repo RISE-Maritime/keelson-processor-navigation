@@ -79,6 +79,14 @@ then back on track within 5 m after `track{}`.
   conn. keelson#282's text says the same (`navigation_conduct.yaml`, local commit on
   `feat/navigation-control-interface`, not pushed). Slipway acceptance: STBD 25 m held at 22.9 ..
   24.0 m with the lease never the ANS's; the lease left to lapse is FALLBACK and she stops.
+- [x] **Orders with no voyage** (Ted, 2026-11-25). A TRACK order still needs the one ACTIVE voyage
+  that names its route. A course, heading, hold, go_to or loiter order steers by her own sensors, so
+  with no voyage it is taken alone (`_free_order`): it stands in for the route at conduct
+  (`route = order/{id}`), drives with no plan (the order's speed, else the speed she has, else the
+  default; never above full ahead), is carried out under the holder's conn like any other, and
+  lapses when a voyage starts -- the voyage changing still ends it. Two ACTIVE voyages refuse every
+  order. Was: every order needed an ACTIVE voyage, so a ROC holding alfa's conn could not give her a
+  heading. keelson#282's conduct text should say the same (asked of dev-keelson).
 - [x] Mismatch with #282 on READY vs FALLBACK when the conn goes elsewhere: resolved with the text
   change above -- the protocol now says the process stands down to FALLBACK (neutral burst, then
   silence), which is what this process does.

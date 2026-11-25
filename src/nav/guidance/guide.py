@@ -190,7 +190,11 @@ class Guidance:
         route_ref: dict | None,
         order: GuidanceOrder = TRACK,
     ) -> list[Emit]:
-        if driving and plan is not None and own is not None and self.state is not None:
+        # A route order steers along the plan; any other order (course, heading, hold, go_to,
+        # loiter) steers by her own sensors, so it drives with no plan too (2026-11-25).
+        on_route = plan is not None and self.state is not None
+        alone = plan is None and order.kind is not Kind.TRACK
+        if driving and own is not None and (on_route or alone):
             if not self._driving:
                 self._driving, self._released, self._next_setpoint_ns = True, False, None
                 self._release_pending = False
@@ -227,7 +231,12 @@ class Guidance:
             else:
                 offset = self.track_offset_m(order, plan)
                 helm_order = self.track.helm(self.track.course(self.state, own, offset), own)
-            if avoiding:
+            if avoiding and not on_route:
+                # No plan to taper or cap by: the advice's speed, else the speed she has.
+                sog = advice.sog_knots if advice.sog_knots is not None else (own.sog_knots or 0.0)
+                why = "accepted advice" if advice.sog_knots is not None else "holding her speed under advice"
+                sog = min(sog, self.speed.full_ahead_sog_knots)
+            elif avoiding:
                 sog, why = target_sog(
                     self.speed,
                     plan,
@@ -257,6 +266,10 @@ class Guidance:
                     own.sog_knots,
                     "holding the speed she has under a course or heading order",
                 )
+            elif not on_route:
+                # No route: no planned speed to take. The configured default, never above full ahead.
+                sog = min(self.speed.default_sog_knots, self.speed.full_ahead_sog_knots)
+                why = "default speed (no route)"
             else:
                 sog, why = target_sog(
                     self.speed,

@@ -25,7 +25,7 @@ from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig, is_navigation_pr
 from .conduct.state import Mode, NavigationState, RouteRef
 from .control import settings as settings_mod
 from .control.commands import Context, Controller, InvalidRequest, Outcome, Pending
-from .control.orders import TRACK
+from .control.orders import TRACK, Kind
 from .guidance import candidates as candidates_mod
 from .guidance.axes import UNKNOWN as HELM_UNKNOWN
 from .guidance.axes import Actuation, ownership
@@ -383,6 +383,16 @@ class Processor:
         if "route_alarms" in changes:
             self.conf["route_monitor"]["alarms"] = changes["route_alarms"]
 
+    @property
+    def _free_order(self) -> bool:
+        """A course, heading, hold, go_to or loiter order given with no voyage, while none is
+        selected: it steers by her own sensors and needs no route (2026-11-25)."""
+        return (
+            self.order.kind is not Kind.TRACK
+            and self._order_voyage is None
+            and self.selection.voyage is None
+        )
+
     def _take_order(self, order, voyage_id: str | None, ordered_by: str) -> None:
         previous, self.order, self._order_voyage = self.order, order, voyage_id
         # Every order taken is a new decision, with a new id: never one the request chose.
@@ -407,6 +417,8 @@ class Processor:
         voyage = self.selection.voyage
         if voyage is not None and voyage.voyage_id == self._order_voyage:
             return
+        if voyage is None and self._order_voyage is None:
+            return  # an order given with no voyage stays while none is selected (_free_order)
         was, given_for = self.order, self._order_voyage
         self._take_order(
             TRACK,
@@ -492,9 +504,17 @@ class Processor:
         route_reason = self.selection.reason
         if self.monitor is None and plan is not None:
             route_reason += "; route_monitor disabled"
+        free = plan is None and self._free_order
+        if free:
+            route_reason = f"no voyage: {self.order.describe()} alone, by her own sensors"
         step = self.conduct.step(
             Gates(
-                route=self.selection.execution_key_token if plan is not None else None,
+                # A voyage-less order stands in for the route: what she is executing (2026-11-25).
+                route=(
+                    self.selection.execution_key_token
+                    if plan is not None
+                    else (f"order/{self._order_id}" if free else None)
+                ),
                 route_reason=route_reason,
                 guidance=self.guidance is not None,
                 conn_held=self.conn_held,
@@ -539,7 +559,7 @@ class Processor:
                 self.guidance.release_helm()
         want = (
             self.guidance is not None
-            and plan is not None
+            and (plan is not None or free)
             and mode in (Mode.READY, Mode.UNDERWAY, Mode.FALLBACK)
         )
         may_take = (
@@ -615,8 +635,14 @@ class Processor:
             holder.controller_id
         ):
             why = f"the conn is now {holder.controller_id}'s"
-        elif voyage is None or voyage.voyage_id != self._directed_voyage:
-            why = f"voyage {self._directed_voyage} is no longer the one selected"
+        elif (voyage.voyage_id if voyage is not None else None) != self._directed_voyage:
+            # The voyage changing ends a directed order -- a voyage starting under a voyage-less
+            # order included; having no voyage at all does not, for an order given with none.
+            why = (
+                f"voyage {self._directed_voyage} is no longer the one selected"
+                if self._directed_voyage is not None
+                else f"voyage {voyage.voyage_id} started under an order given with no voyage"
+            )
         if why is not None:
             self._stand_down(now_ns, why)
             return False
