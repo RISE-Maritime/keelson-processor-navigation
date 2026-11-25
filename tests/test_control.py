@@ -1179,3 +1179,14 @@ def test_default_holder_needs_yield_on_request(default_conf):
     default_conf["conduct"]["yield_on_request"] = False
     with pytest.raises(ConfigError, match="yield_on_request"):
         _validate(default_conf)
+
+
+def test_a_grant_names_the_station_as_operator_at_site(default_conf):
+    """A station requests as operator + site in two fields (Crowsnest's CommandRequest); the grant must
+    name it `operator@site`, its controller id, or the station never recognises the conn as its own."""
+    rig = _sailing(default_conf)
+    _request(rig, requester="ted-sup", site="ROC-TED")
+    rig.run(0.5)
+    grants = [o.payload for o in rig.published("command_authority") if o.payload.get("controller_site") == "ROC-TED"]
+    assert grants and grants[-1]["controller_id"] == "ted-sup@ROC-TED", grants
+    assert rig.p.lease_book.holder(rig.now).controller_id == "ted-sup@ROC-TED"

@@ -90,6 +90,21 @@ class LeaseEvent:
     detail: str
 
 
+def grantee_id(request: dict) -> str:
+    """The controller id a directed grant names: ``{requester_id}@{requester_site}``.
+
+    A station's controller id is ``operator@site``, but its CommandRequest carries the operator and the
+    site in two fields (Crowsnest ``buildCommandRequest``), and Crowsnest's own directed grant joins them
+    (``useCommandAuthority`` grant). Copying ``requester_id`` alone named a holder no station is: measured
+    on sim-ted-bulk-alfa 2026-11-25, ROC-TED (ted-sup) requested, was granted "ted-sup", did not recognise
+    it as its own, never heartbeated it, and the conn lapsed back to this process every 30 s. An id that
+    already carries a site (``ted@roc1``, ``navigation/0@vessel``) is used as it is.
+    """
+    requester = request.get("requester_id") or ""
+    site = request.get("requester_site") or ""
+    return requester if "@" in requester or not site else f"{requester}@{site}"
+
+
 class LeaseClient:
     """Takes, adopts, heartbeats and releases the conn for one controller id."""
 
@@ -207,7 +222,7 @@ class LeaseClient:
         self.self_issued.add(token)  # never adopted back as a grant to this process
         return {
             "vessel_id": c.vessel_id,
-            "controller_id": request["requester_id"],
+            "controller_id": grantee_id(request),
             # Exactly as requested: a station adopts a grant only when id AND site are its own.
             "controller_site": request.get("requester_site", ""),
             "token": token,
