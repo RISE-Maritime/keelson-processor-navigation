@@ -12,10 +12,13 @@ requires-python = ">=3.11"
 authors = [{ name = "RISE Maritime" }]
 dependencies = [
     # An exact published keelson, never a local checkout. This is keelson's experimental channel
-    # (0.6.0-experimental.21 on npm; dev + open PRs incl. #282 navigation_control/v1, #308 go_to,
-    # #316 setpoint subjects, #320 DP + loiter, #322 settings, #324 track offset + reverse, and #331
-    # NavigationAuthority, read for crowsnest-dev#90); repin to the -pre.N carrying them once they merge.
-    "keelson==0.6.0.dev21",
+    # (0.6.0-experimental.25 on npm; dev + open PRs incl. #282 navigation_control/v1, #308 go_to,
+    # #316 setpoint subjects, #320 DP + loiter, #322 settings, #324 track offset + reverse, #331
+    # NavigationAuthority, and NavigationState.order_id / ordered_by (crowsnest-dev#94), which
+    # Crowsnest's "Slipway override" alarm reads). .25 is the NEWEST build carrying all of them:
+    # .26 drops the #316 setpoint subjects and .27/.28 also ControlGate (measured 2026-11-25).
+    # Repin to the -pre.N carrying them once they merge.
+    "keelson==0.6.0.dev25",
     "eclipse-zenoh>=1.2.1",
     "protobuf>=5.29.1",
     "pyyaml>=6.0",

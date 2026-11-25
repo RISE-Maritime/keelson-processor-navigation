@@ -78,13 +78,17 @@ cd ../SLIPWAY && PYTHONPATH=../keelson-processor-navigation/src:../keelson-proce
 - `tests/fixtures/rivo_crossing.jsonl` is regenerated from the Slipway kernel in-process, never
   from the shared bus, with `tools/rivo_crossing_fixture.py` (the command is in its docstring).
   A regeneration against an unchanged trajectory must be byte-identical.
-- keelson is an exact published version pinned in `pyproject.toml` (now the keelson#282 alpha),
-  never the monorepo checkout: that checkout is on whatever branch another session left it.
+- keelson is an exact published EXPERIMENTAL version pinned in `pyproject.toml` (Ted, 2026-11-25:
+  experimental releases only; now `0.6.0.dev25`, the newest carrying the #316 setpoint subjects,
+  ControlGate and NavigationState.order_id/ordered_by), never the monorepo checkout: that checkout is
+  on whatever branch another session left it.
 - ruff, line length 100.
 - The tick never publishes axes. It leaves `Processor.actuation`; `bus/vehicle_control.py` repeats
   it at 10-20 Hz and stops at `valid_until_ns`.
 - Pulling the lease must stop the vessel: after FALLBACK the processor never takes the conn back on
-  its own, only a grant naming it resumes. `tests/test_fsm.py` holds the matrix.
+  its own, only a grant naming it resumes. `tests/test_fsm.py` holds the matrix. **Except as the
+  conn's default holder** (`conduct.default_holder`, Ted 2026-11-25): a released or lapsed station
+  conn comes back to it with the order in force; stopping is an order or the E-stop (README).
 - `command_authority` and `command_request` go out under source_id = entity_id: Slipway subscribes
   `command_authority/*`, one chunk.
 - A control loop on a Slipway L0 hull has no inertia to hide behind: keep throttle and yaw-damping
