@@ -255,6 +255,9 @@ and never lets go of a free one:
   longer stops her; stopping her is an order (hold, loiter, crash stop) or the E-stop;
 - after a FALLBACK (a station took the helm, inputs went stale) **any** new order re-arms it, and
   arrival ends the voyage without releasing the conn;
+- **just started**, it waits `startup_grace_s` (12 s, longer than a holder's 10 s heartbeat) before
+  taking a conn that looks free: it has heard no lease yet, and taking at once stole a ROC's live
+  conn on every restart;
 - **unattended** -- its own conn, no order since it became so -- for `unattended_hold_s` (120 s; 0
   never) while under way, it holds position: a `loiter` within `unattended_hold_radius_m` of where
   she is, logged as `KIND_GUIDANCE_ORDER` "unattended for … holding position". DP would hold the

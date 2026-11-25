@@ -989,6 +989,7 @@ def default_conf(control_conf):
     control_conf["conduct"]["unattended_hold_s"] = 0.0  # the watchdog has its own tests
     control_conf["control"]["controllers"] = [INSTRUCTOR]
     control_conf["control"]["instructors"] = [INSTRUCTOR]
+    control_conf["conduct"]["startup_grace_s"] = 0.0  # the grace has its own test
     return control_conf
 
 
@@ -1190,3 +1191,24 @@ def test_a_grant_names_the_station_as_operator_at_site(default_conf):
     grants = [o.payload for o in rig.published("command_authority") if o.payload.get("controller_site") == "ROC-TED"]
     assert grants and grants[-1]["controller_id"] == "ted-sup@ROC-TED", grants
     assert rig.p.lease_book.holder(rig.now).controller_id == "ted-sup@ROC-TED"
+
+
+def test_a_restarted_ans_does_not_take_a_conn_a_station_still_holds(default_conf):
+    """Measured 2026-11-25: every ANS restart took the conn from Ted's ROC. Started, it has heard no lease,
+    so the conn looks free; it must wait out a heartbeat before believing that."""
+    default_conf["conduct"]["startup_grace_s"] = 12.0
+    rig = Rig(default_conf)
+    rig.run(5.0)  # just started: the station's next heartbeat is still on its way
+    assert not rig.p.conn_held, "took the conn before a holder's heartbeat could arrive"
+    rig.lease(OPERATOR, "op-1")  # it arrives
+    rig.run(10.0)
+    assert not rig.p.conn_held and rig.p.lease_book.holder(rig.now).controller_id == OPERATOR
+
+
+def test_with_nobody_holding_it_the_ans_takes_the_conn_after_the_grace(default_conf):
+    default_conf["conduct"]["startup_grace_s"] = 12.0
+    rig = Rig(default_conf)
+    rig.run(11.0)
+    assert not rig.p.conn_held
+    rig.run(2.0)
+    assert rig.p.conn_held

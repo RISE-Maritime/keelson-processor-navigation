@@ -154,6 +154,7 @@ class Processor:
         # conn -- starts the unattended watchdog.
         self._orders_taken = 0
         self._attended_ns: int | None = None
+        self._started_ns: int | None = None  # the first tick: default_holder's startup grace counts from it
 
     def enabled(self, module: str) -> bool:
         return bool(self.conf["modules"].get(module))
@@ -522,13 +523,17 @@ class Processor:
         else:
             arrived = bool(progress and progress.arrived)
         default = cd["default_holder"]
+        if self._started_ns is None:
+            self._started_ns = now_ns
+        # Until a holder's heartbeat could have arrived, a conn that looks free is only unheard.
+        settled = now_ns - self._started_ns >= int(cd["startup_grace_s"] * 1e9)
         if default:
             # Held before the machine steps, so a conn that comes back to it -- released, or lapsed
             # -- is already its own when the machine asks, and the order in force goes on.
             out += self._lease_step(
                 now_ns,
                 want=self.guidance is not None,
-                may_take=may_drive(self.authority.level) and helm in ("free", "ours"),
+                may_take=settled and may_drive(self.authority.level) and helm in ("free", "ours"),
                 yield_to=yield_to,
                 default=True,
             )

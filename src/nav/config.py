@@ -110,6 +110,10 @@ CONDUCT_DEFAULTS = {
     # under way, it holds position: a loiter within unattended_hold_radius_m of where she is. 0: never.
     "unattended_hold_s": 120.0,
     "unattended_hold_radius_m": 50.0,
+    # default_holder: after starting, wait this long before taking a "free" conn. A process that has
+    # just started has heard no lease yet, so every conn looks free; taking it at once stole a ROC's
+    # live conn on each ANS restart (measured 2026-11-25). Longer than the holders' heartbeat (10 s).
+    "startup_grace_s": 12.0,
     "authority_source": None,
     "authority_max_age_s": 10.0,
     "fixed_authority_level": None,
@@ -301,6 +305,8 @@ def _validate_conduct(conf: dict) -> None:
             raise ConfigError(f"conduct.{key} must be true or false")
     if not _non_negative(cd["unattended_hold_s"]):
         raise ConfigError("conduct.unattended_hold_s must be a number of seconds, 0 for never")
+    if not _non_negative(cd["startup_grace_s"]):
+        raise ConfigError("conduct.startup_grace_s must be a number of seconds")
     if not _positive(cd["unattended_hold_radius_m"]):
         raise ConfigError("conduct.unattended_hold_radius_m must be a positive number")
     if cd["default_holder"]:
