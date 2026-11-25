@@ -173,7 +173,8 @@ What the state machine guarantees:
 - **Losing any of them** is FALLBACK: neutral axes for `neutral_burst_s`, then silence, so the
   vehicle's dead-man stops the hull. Arrival does the same, then releases the conn (under an
   operator's conn there is none to release, and it ends at once).
-- **Pulling the lease stops the vessel.** After a FALLBACK the processor does not take the conn
+- **Pulling the lease stops the vessel** -- except as the default holder (below), where the conn
+  comes back to it with the order in force. After a FALLBACK the processor does not take the conn
   back, even with `take_conn_when_free`; only a grant naming it, or a new order from the live conn
   holder, resumes.
 - **A stalled tick loop goes silent.** Axes are repeated only until `command_hold_s` after the
@@ -242,6 +243,29 @@ default): an operator's request is granted with keelson's directed `grant` -- a 
 the requester and its site -- and she stops as on a pulled lease (neutral burst, then silence), with
 the axis mapping released so the operator's helm is free. It resumes only on a new grant. A request
 from another navigation process (`navigation/…@…`) is never granted.
+
+**The default holder** (`conduct.default_holder`, Ted 2026-11-25). Off by default; on for Slipway's
+ANS ships. The ANS then holds the conn **whenever no station does**, from any mode, idle included,
+and never lets go of a free one:
+- an operator's `command_request` is still granted, and the **order in force goes on** under the
+  operator's conn ("carrying out the order of …") until the operator orders otherwise -- the
+  mapping is not released;
+- the operator releasing the conn, or letting it lapse, hands her **back with that order still in
+  force**: the conn is taken again in the same tick, so she does not fall back. Pulling the lease no
+  longer stops her; stopping her is an order (hold, loiter, crash stop) or the E-stop;
+- after a FALLBACK (a station took the helm, inputs went stale) **any** new order re-arms it, and
+  arrival ends the voyage without releasing the conn;
+- **unattended** -- its own conn, no order since it became so -- for `unattended_hold_s` (120 s; 0
+  never) while under way, it holds position: a `loiter` within `unattended_hold_radius_m` of where
+  she is, logged as `KIND_GUIDANCE_ORDER` "unattended for … holding position". DP would hold the
+  heading too, but guidance has no lateral authority; `hold` is neutral drift.
+
+**Instructors** (`control.instructors`, simulation only). An exercise instructor -- Slipway's station
+-- may order it at any time, **even while an operator holds the conn**. The order is carried out
+under the operator's conn, which stays theirs, and is logged "instructor override: …";
+`navigation_state.ordered_by` names the instructor, which is how Crowsnest raises its override
+alarm. The operator's next order replaces it. A `control.controllers` entry that is no instructor is
+still outranked by an operator's conn.
 
 The order in force is reported as `navigation_state.guidance_order`, and the UNDERWAY sub-mode
 follows it: `SUB_MODE_STEERING` for a course or heading, `SUB_MODE_HOLDING` for hold. A `go_to`

@@ -108,6 +108,9 @@ class Outcome:
     # The order came from the live conn holder, presenting its token, while this process does not
     # hold the conn: the process carries it out under that holder's conn (navigation_conduct).
     from_holder: bool = False
+    # An exercise instructor's order given while an operator holds the conn (Ted, 2026-11-25): it is
+    # carried out under that operator's conn, which stays theirs, and reported as an override.
+    instructed: bool = False
 
     @property
     def accepted(self) -> bool:
@@ -120,6 +123,7 @@ class Controller:
 
         self.site = conf["conduct"]["controller_site"]
         self.permitted = frozenset(conf["control"]["controllers"])
+        self.instructors = frozenset(conf["control"].get("instructors") or ())
         self._new_id = id_factory or (lambda: uuid.uuid4().hex)
 
     # -- who may call --------------------------------------------------------------------------
@@ -131,6 +135,10 @@ class Controller:
         controller = caller.get("controller_id") or ""
         if not controller:
             return "no caller.controller_id"
+        # An exercise instructor (a simulator's station) may order her at any time: the
+        # instructor overrides the order, never the conn (Ted, 2026-11-25).
+        if controller in self.instructors:
+            return None
         token = caller.get("authority_token")
         if token and ctx.holder_token is not None and token == ctx.holder_token:
             return None
@@ -173,6 +181,13 @@ class Controller:
                 else self._set_order(req, ctx, controller)
             )
             outcome.from_holder = outcome.accepted and self._from_holder(req, ctx)
+            outcome.instructed = (
+                outcome.accepted
+                and not outcome.from_holder
+                and controller in self.instructors
+                and ctx.holder_token is not None
+                and not ctx.conn_held
+            )
             return outcome
         if pending.procedure == "set_settings":
             return self._set_settings(req, ctx, controller)

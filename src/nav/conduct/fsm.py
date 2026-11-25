@@ -14,6 +14,11 @@ mode for that tick. Two rules carry the safety case:
   navigation_conduct, 2026-09-29): the operator keeps the conn and the responsibility. Leaving
   FALLBACK then needs a new order from the live conn holder (``order_serial`` moved on), so a
   lapsed lease or a station taking the helm stops her until someone orders her again.
+- As the conn's DEFAULT HOLDER (conduct.default_holder, Ted 2026-11-25) the first rule changes:
+  releasing the lease no longer stops her -- the conn comes back to this process and the order in
+  force goes on, because "nobody holds it" now means "the ANS does". Stopping her is an order (hold,
+  loiter, crash stop) or the E-stop. A FALLBACK is then left by any new order (``orders_taken``
+  moved on), whoever gave it, and ARRIVED ends without releasing a conn it keeps by design.
 """
 
 from __future__ import annotations
@@ -47,6 +52,8 @@ class Gates:
     directed_by: str = ""  # the live holder whose order is carried out, e.g. "ted@roc1"
     order_serial: int = 0  # counts orders from a conn holder, so a new one can be recognised
     conn_holder: str | None = None  # controller_id of the live lease, whoever holds it
+    default_holder: bool = False  # conduct.default_holder: it holds the conn whenever nobody does
+    orders_taken: int = 0  # counts every order taken, whoever gave it (default_holder's re-arm)
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,7 @@ class Conduct:
         self.reason = "not started"
         self._fallback_token: str | None = None
         self._fallback_serial = 0
+        self._fallback_orders = 0
         self._ended_route: str | None = None
         self._under_order = False  # UNDERWAY on the holder's order, not on a conn of its own
 
@@ -101,6 +109,7 @@ class Conduct:
         if mode is Mode.FALLBACK and before is not Mode.FALLBACK:
             self._fallback_token = g.conn_token
             self._fallback_serial = g.order_serial
+            self._fallback_orders = g.orders_taken
         if mode is Mode.UNDERWAY:
             self._under_order = not g.conn_held
         if mode is Mode.ENDED and before is not Mode.ENDED:
@@ -133,10 +142,14 @@ class Conduct:
                 return Mode.READY, none, "conn granted again after fallback"
             if g.directed and not g.conn_held and g.order_serial != self._fallback_serial:
                 return Mode.READY, none, f"a new order from the conn holder {g.directed_by}"
-            if g.route is None and not g.conn_held:
+            if g.default_holder and g.orders_taken != self._fallback_orders:
+                return Mode.READY, none, "a new order after fallback"
+            if g.route is None and (not g.conn_held or g.default_holder):
                 return Mode.IDLE, none, "fallback cleared: no route selected and conn not held"
             return Mode.FALLBACK, none, self.reason
         if m is Mode.ARRIVED:
+            if g.default_holder:
+                return Mode.ENDED, none, "arrived; the order is carried out (conn kept: default holder)"
             if not g.conn_held:
                 # Under an operator's conn there is no conn of its own to release: it ends at once.
                 done = "the conn holder's order is carried out" if self._under_order else None

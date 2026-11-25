@@ -27,16 +27,16 @@ control:
 
 inputs:
   location_fix: gnss
-  heading_true_north_deg: sim
-  course_over_ground_deg: sim
-  speed_over_ground_knots: sim
-  yaw_rate_degps: sim
+  heading_true_north_deg: slipway
+  course_over_ground_deg: slipway
+  speed_over_ground_knots: slipway
+  yaw_rate_degps: slipway
 
 conduct:
   take_conn_when_free: true
   fixed_authority_level: AUTHORITY_LEVEL_REMOTE_CONTROLLED
 
 guidance:
-  responder_id: sim
+  responder_id: slipway           # the Slipway kernel's source id (6a6f555)
   full_ahead_sog_knots: 20.5       # alpha 2.0.0 cruises at 20.5 kn at 100 %
   default_sog_knots: 8

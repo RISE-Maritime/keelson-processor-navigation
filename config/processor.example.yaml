@@ -108,6 +108,10 @@ conduct:
   request_conn: false              # publish command_request while READY without the conn
   request_interval_s: 10
   take_conn_when_free: false       # take a conn nobody holds. Never after FALLBACK: resuming needs a grant
+  default_holder: false            # hold the conn whenever no station does, from any mode; a released or lapsed
+                                   # station conn comes back with the order in force (README "The default holder")
+  unattended_hold_s: 120           # default_holder: unattended this long under way -> loiter where she is. 0: never
+  unattended_hold_radius_m: 50
   authority_source: null           # operational_authority source; without one the level is UNKNOWN and guidance never drives
   authority_max_age_s: 10
   fixed_authority_level: null      # software-in-the-loop only, e.g. AUTHORITY_LEVEL_REMOTE_CONTROLLED; stated in every navigation_state
@@ -147,6 +151,9 @@ control:
   # Who may direct this processor while it holds the conn itself, without presenting a lease token.
   # The conn holder always may. Empty: only the conn holder.
   controllers: []
+  # Exercise instructors (a simulator's station) may order it at any time, even under an operator's
+  # conn, which stays the operator's; ordered_by names the instructor. Never on a real vessel.
+  instructors: []
   reply_timeout_s: 3
   fetch_timeout_s: 3                # load_route from another vessel: reading its stored edition
 

@@ -25,7 +25,7 @@ from .conduct.lease import LeaseBook, LeaseClient, LeaseConfig, is_navigation_pr
 from .conduct.state import Mode, NavigationState, RouteRef
 from .control import settings as settings_mod
 from .control.commands import Context, Controller, InvalidRequest, Outcome, Pending
-from .control.orders import TRACK, Kind
+from .control.orders import TRACK, GuidanceOrder, Kind
 from .guidance import candidates as candidates_mod
 from .guidance.axes import UNKNOWN as HELM_UNKNOWN
 from .guidance.axes import Actuation, ownership
@@ -149,6 +149,11 @@ class Processor:
         self._directed_voyage: str | None = None
         self._directed_by: str | None = None
         self.directed = False
+        # conduct.default_holder (Ted, 2026-11-25): every order taken, whoever gave it, re-arms a
+        # FALLBACK; and the last time anyone attended her -- an order, or a station holding the
+        # conn -- starts the unattended watchdog.
+        self._orders_taken = 0
+        self._attended_ns: int | None = None
 
     def enabled(self, module: str) -> bool:
         return bool(self.conf["modules"].get(module))
@@ -336,6 +341,23 @@ class Processor:
                 if outcome.order is not None:
                     caller = (pending.request.get("caller") or {}).get("controller_id", "")
                     self._take_order(outcome.order, outcome.voyage_id, caller)
+                    self._attended_ns = now_ns
+                if (
+                    outcome.instructed
+                    and holder is not None
+                    and not is_navigation_process(holder.controller_id)
+                ):
+                    # The instructor's order is carried out under the operator's conn, exactly as
+                    # if the operator had given it; the conn stays theirs (Ted, 2026-11-25).
+                    self._holder_orders += 1
+                    self._directed_voyage = outcome.voyage_id
+                    self._decide(
+                        now_ns,
+                        "KIND_GUIDANCE_ORDER",
+                        source,
+                        f"instructor override: {outcome.detail}; carried out under "
+                        f"{holder.controller_id}'s conn, which stays theirs",
+                    )
                 if (
                     outcome.from_holder
                     and holder is not None
@@ -395,6 +417,7 @@ class Processor:
 
     def _take_order(self, order, voyage_id: str | None, ordered_by: str) -> None:
         previous, self.order, self._order_voyage = self.order, order, voyage_id
+        self._orders_taken += 1
         # Every order taken is a new decision, with a new id: never one the request chose.
         self._order_id, self._ordered_by = self._new_id(), ordered_by
         self._next_state_ns = None  # published at once, before any candidate names the new id
@@ -498,6 +521,17 @@ class Processor:
             arrived = self.guidance.track.arrived
         else:
             arrived = bool(progress and progress.arrived)
+        default = cd["default_holder"]
+        if default:
+            # Held before the machine steps, so a conn that comes back to it -- released, or lapsed
+            # -- is already its own when the machine asks, and the order in force goes on.
+            out += self._lease_step(
+                now_ns,
+                want=self.guidance is not None,
+                may_take=may_drive(self.authority.level) and helm in ("free", "ours"),
+                yield_to=yield_to,
+                default=True,
+            )
         self.conn_held = self.lease.held(self.lease_book, now_ns)
         holder = self.lease_book.holder(now_ns)
         self.directed = self._directed(now_ns, holder)
@@ -533,6 +567,8 @@ class Processor:
                 directed_by=self._directed_by or "",
                 order_serial=self._holder_orders,
                 conn_holder=holder.controller_id if holder is not None else None,
+                default_holder=default,
+                orders_taken=self._orders_taken,
             )
         )
         if step.changed:
@@ -557,44 +593,27 @@ class Processor:
                 # It acted only on the holder's behalf: once silent, free the helm for the
                 # operator, as when it hands its own conn over.
                 self.guidance.release_helm()
-        want = (
-            self.guidance is not None
-            and (plan is not None or free)
-            and mode in (Mode.READY, Mode.UNDERWAY, Mode.FALLBACK)
-        )
-        may_take = (
-            cd["take_conn_when_free"]
-            and mode is Mode.READY
-            and may_drive(self.authority.level)
-            and not self._missing
-            and helm in ("free", "ours")
-        )
-        publish, events = self.lease.step(
-            self.lease_book,
-            now_ns,
-            want=want,
-            may_take=may_take,
-            may_request=cd["request_conn"],
-            yield_to=yield_to,
-        )
-        for subject, payload in publish:
-            if subject == "command_authority":
-                self.lease_book.hear(payload, now_ns)
-            out.append(Output("conduct", subject, payload, source_id=self.conf["entity_id"]))
-        for event in events:
-            if not (event.kind == "requested" and self._last_lease_event == "requested"):
-                self._decide(
-                    now_ns,
-                    _LEASE_KINDS[event.kind],
-                    config_mod.module_source_id(self.conf, "conduct"),
-                    event.detail,
-                )
-            self._last_lease_event = event.kind
-            if event.kind == "handed" and self.guidance is not None:
-                # Free the operator's helm: the axis mapping is released once guidance goes
-                # silent, by the same path as the end of a voyage.
-                self.guidance.release_helm()
+        if not default:
+            out += self._lease_step(
+                now_ns,
+                want=(
+                    self.guidance is not None
+                    and (plan is not None or free)
+                    and mode in (Mode.READY, Mode.UNDERWAY, Mode.FALLBACK)
+                ),
+                may_take=(
+                    cd["take_conn_when_free"]
+                    and mode is Mode.READY
+                    and may_drive(self.authority.level)
+                    and not self._missing
+                    and helm in ("free", "ours")
+                ),
+                yield_to=yield_to,
+                default=False,
+            )
         self.conn_held = self.lease.held(self.lease_book, now_ns)
+        if default:
+            self._watchdog(now_ns, mode, own)
 
         if self.guidance is not None:
             ref = None
@@ -619,6 +638,85 @@ class Processor:
             if self._gate:
                 self._gate_candidates(now_ns, accepted, self.lease_book.holder(now_ns))
         return out
+
+    def _lease_step(
+        self, now_ns: int, *, want: bool, may_take: bool, yield_to, default: bool
+    ) -> list[Output]:
+        out: list[Output] = []
+        publish, events = self.lease.step(
+            self.lease_book,
+            now_ns,
+            want=want,
+            may_take=may_take,
+            may_request=self.conf["conduct"]["request_conn"],
+            yield_to=yield_to,
+        )
+        for subject, payload in publish:
+            if subject == "command_authority":
+                self.lease_book.hear(payload, now_ns)
+            out.append(Output("conduct", subject, payload, source_id=self.conf["entity_id"]))
+        for event in events:
+            detail = event.detail
+            if default and event.kind == "taken" and self.order is not None:
+                detail += f"; order {self.order.describe()} stays in force"
+            if not (event.kind == "requested" and self._last_lease_event == "requested"):
+                self._decide(
+                    now_ns,
+                    _LEASE_KINDS[event.kind],
+                    config_mod.module_source_id(self.conf, "conduct"),
+                    detail,
+                )
+            self._last_lease_event = event.kind
+            if event.kind == "taken":
+                self._attended_ns = now_ns  # the watchdog counts from when she became its own
+            if event.kind == "handed" and self.guidance is not None:
+                if default:
+                    # The station asked for the conn to command her, not to stop her: the order
+                    # in force goes on under its conn until it orders otherwise (Ted, 2026-11-25).
+                    voyage = self.selection.voyage
+                    self._holder_orders += 1
+                    self._directed_voyage = voyage.voyage_id if voyage is not None else None
+                else:
+                    # Free the operator's helm: the axis mapping is released once guidance goes
+                    # silent, by the same path as the end of a voyage.
+                    self.guidance.release_helm()
+        return out
+
+    def _watchdog(self, now_ns: int, mode: Mode, own) -> None:
+        """Unattended -- the conn its own, and no order since it became so -- for longer than
+        conduct.unattended_hold_s while under way: hold position, a loiter around where she is
+        (Ted, 2026-11-25). DP would hold heading too, but guidance has no lateral authority; the
+        ANS's own HOLD is neutral drift, which is not holding position."""
+        cd = self.conf["conduct"]
+        limit_s = cd["unattended_hold_s"]
+        if not self.conn_held:
+            self._attended_ns = now_ns  # a station holds her (or nobody, until it takes): attended
+            return
+        if self._attended_ns is None:
+            self._attended_ns = now_ns
+        if (
+            not limit_s
+            or mode is not Mode.UNDERWAY
+            or own is None
+            or self.order.kind in (Kind.LOITER, Kind.HOLD)
+            or now_ns - self._attended_ns < int(limit_s * 1e9)
+        ):
+            return
+        radius = cd["unattended_hold_radius_m"]
+        hold = GuidanceOrder(Kind.LOITER, None, None, None, (own.lat, own.lon), radius_m=radius)
+        voyage = self.selection.voyage
+        was = self.order.describe()
+        self._take_order(
+            hold, voyage.voyage_id if voyage is not None else None, config_mod.controller_id(self.conf)
+        )
+        self._attended_ns = now_ns
+        self._decide(
+            now_ns,
+            "KIND_GUIDANCE_ORDER",
+            config_mod.module_source_id(self.conf, "conduct"),
+            f"unattended for {limit_s:g} s with no station holding the conn: holding position "
+            f"(loiter within {radius:g} m of {own.lat:.5f}, {own.lon:.5f}) instead of {was}",
+        )
 
     def _directed(self, now_ns: int, holder) -> bool:
         """True while it carries out the live conn holder's order under that holder's conn: an

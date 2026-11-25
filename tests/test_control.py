@@ -971,3 +971,211 @@ def test_two_active_voyages_refuse_every_order(control_conf):
     rig.run(0.5)
     p = rig.call("set_guidance_order", {"caller": caller(OPERATOR, token="op-1"), "order": {"heading_deg": 90.0}})
     assert p.response["result"] == "COMMAND_RESULT_TEMPORARILY_REJECTED"
+
+
+# -- the ANS is the conn's default holder; Slipway instructs (Ted, 2026-11-25) -----------------
+# Whenever no station holds the conn the ANS does, from any mode. A station granted the conn on
+# request carries the order in force on until it orders otherwise; releasing the conn, or letting
+# it lapse, hands her back with that order still in force. Unattended past a limit, she holds
+# position. An exercise instructor may change her order even under a station's conn, which stays
+# the station's.
+
+INSTRUCTOR = "slipway"
+
+
+@pytest.fixture
+def default_conf(control_conf):
+    control_conf["conduct"]["default_holder"] = True
+    control_conf["conduct"]["unattended_hold_s"] = 0.0  # the watchdog has its own tests
+    control_conf["control"]["controllers"] = [INSTRUCTOR]
+    control_conf["control"]["instructors"] = [INSTRUCTOR]
+    return control_conf
+
+
+def _own_lease(rig):
+    held = [o.payload for o in rig.published("command_authority") if o.payload.get("controller_id") == ME]
+    return held[-1] if held else None
+
+
+def _sailing(conf) -> Rig:
+    """Scenario start: nobody holds the conn, the simulator loads her route, the ANS sails it."""
+    rig = Rig(conf)
+    p = rig.call("load_route", load(caller=caller(INSTRUCTOR)))
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    assert rig.p.conn_held and rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+    return rig
+
+
+def _request(rig, requester=OPERATOR, site="roc1"):
+    rig.p.world.put_request(
+        {"vessel_id": rig.p.conf["entity_id"], "requester_id": requester, "requester_site": site},
+        rig.now,
+    )
+
+
+def _granted_token(rig, to=OPERATOR):
+    grants = [o.payload for o in rig.published("command_authority") if o.payload.get("controller_id") == to]
+    assert grants, f"no grant to {to}"
+    return grants[-1]["token"]
+
+
+def test_the_default_holder_takes_a_free_conn_even_with_nothing_to_sail(default_conf):
+    rig = Rig(default_conf)
+    rig.run(1.0)
+    assert rig.p.selection.voyage is None and rig.p.conduct.mode is Mode.IDLE
+    assert rig.p.conn_held, "nobody holds the conn, so the ANS does"
+    assert _own_lease(rig) is not None
+    rig.run(40.0)  # past a TTL: it keeps the conn (heartbeats) though it has nothing to do
+    assert rig.p.conn_held and not rig.published("command_authority")[-1].payload["released"]
+
+
+def test_without_default_holder_an_idle_ans_takes_no_conn(control_conf):
+    control_conf["conduct"]["take_conn_when_free"] = True
+    rig = Rig(control_conf)
+    rig.run(1.0)
+    assert not rig.p.conn_held
+
+
+def test_a_station_granted_the_conn_carries_the_order_in_force_on(default_conf):
+    rig = _sailing(default_conf)
+    _request(rig)
+    rig.run(0.5)
+    assert not rig.p.conn_held, "an operator's request is answered with the conn"
+    _granted_token(rig)
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+    assert "carrying out the order of ted@roc1" in rig.p.conduct.reason
+    assert rig.p.order.kind is Kind.TRACK
+    assert rig.mapping == wanted_mapping(SRC, 1.0), "the helm is not let go of on a handover"
+
+
+def test_a_released_conn_comes_back_and_her_order_goes_on(default_conf):
+    rig = _sailing(default_conf)
+    _request(rig)
+    rig.run(0.5)
+    token = _granted_token(rig)
+    rig.lease(OPERATOR, token)  # the station adopts the grant and heartbeats it
+    p = rig.call("set_guidance_order", {"caller": caller(OPERATOR, token=token), "order": {"heading_deg": 90.0}})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(0.5)
+    assert "carrying out the order of ted@roc1" in rig.p.conduct.reason
+    rig.p.world.put_lease({"token": token, "released": True}, rig.now)
+    rig.run(0.5)
+    assert rig.p.conn_held, "released: the conn comes back to the default holder"
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+    assert rig.p.order.kind is Kind.HEADING and rig.p.order.value_deg == 90.0
+    summaries = [o.payload.get("summary", "") for o in rig.published("navigation_decision")]
+    assert any("stays in force" in s for s in summaries), summaries
+
+
+def test_a_lapsed_station_lease_hands_her_back_without_stopping(default_conf):
+    rig = _sailing(default_conf)
+    _request(rig)
+    rig.run(0.5)
+    rig.lease(OPERATOR, _granted_token(rig))
+    rig.run(31.0)  # the station falls silent: no heartbeat for a TTL
+    assert rig.p.conn_held
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+
+
+def test_unattended_past_the_limit_she_holds_position(default_conf):
+    default_conf["conduct"]["unattended_hold_s"] = 5.0
+    rig = _sailing(default_conf)
+    rig.run(3.0)
+    assert rig.p.order.kind is Kind.TRACK, "not yet: within the limit"
+    rig.run(3.0)
+    order = rig.p.order
+    assert order.kind is Kind.LOITER, order
+    assert order.radius_m == default_conf["conduct"]["unattended_hold_radius_m"]
+    assert abs(order.position[0] - rig.pos[0]) < 1e-6 and abs(order.position[1] - rig.pos[1]) < 1e-6
+    summaries = [o.payload.get("summary", "") for o in rig.published("navigation_decision")]
+    assert any("unattended for 5 s" in s and "holding position" in s for s in summaries), summaries
+    assert rig.p.conduct.mode is Mode.UNDERWAY
+
+
+def test_an_order_restarts_the_unattended_clock(default_conf):
+    default_conf["conduct"]["unattended_hold_s"] = 5.0
+    rig = _sailing(default_conf)
+    rig.run(4.0)
+    p = rig.call("set_guidance_order", {"caller": caller(INSTRUCTOR), "order": {"heading_deg": 45.0}})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(4.0)
+    assert rig.p.order.kind is Kind.HEADING, "the instructor attended her 4 s ago"
+    rig.run(2.0)
+    assert rig.p.order.kind is Kind.LOITER
+
+
+def test_a_station_holding_the_conn_is_attending_her(default_conf):
+    default_conf["conduct"]["unattended_hold_s"] = 5.0
+    rig = _sailing(default_conf)
+    _request(rig)
+    rig.run(0.5)
+    token = _granted_token(rig)
+    for _ in range(4):  # 20 s under the station's conn, heartbeating
+        rig.lease(OPERATOR, token)
+        rig.run(5.0)
+    assert rig.p.order.kind is Kind.TRACK
+
+
+def test_a_zero_limit_never_holds_position(default_conf):
+    rig = _sailing(default_conf)  # unattended_hold_s = 0 in this fixture
+    rig.run(200.0)
+    assert rig.p.order.kind is Kind.TRACK
+
+
+def test_an_instructor_overrides_the_order_never_the_conn(default_conf):
+    rig = _sailing(default_conf)
+    _request(rig)
+    rig.run(0.5)
+    token = _granted_token(rig)
+    rig.lease(OPERATOR, token)
+    rig.call("set_guidance_order", {"caller": caller(OPERATOR, token=token), "order": {"heading_deg": 90.0}})
+    rig.run(0.5)
+    p = rig.call("set_guidance_order", {"caller": caller(INSTRUCTOR), "order": {"heading_deg": 180.0}})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(0.5)
+    assert rig.p.order.value_deg == 180.0
+    assert not rig.p.conn_held, "the conn stays the operator's"
+    assert rig.p.lease_book.holder(rig.now).controller_id == OPERATOR
+    assert rig.p.conduct.mode is Mode.UNDERWAY and "carrying out the order of ted@roc1" in rig.p.conduct.reason
+    state = rig.published("navigation_state")[-1].payload
+    if "ordered_by" in state:  # on a keelson build that carries #94's fields
+        assert state["ordered_by"] == INSTRUCTOR
+    summaries = [o.payload.get("summary", "") for o in rig.published("navigation_decision")]
+    assert any(s.startswith("instructor override:") and "ted@roc1's conn" in s for s in summaries), summaries
+    # The operator's next order replaces the instructor's.
+    rig.call("set_guidance_order", {"caller": caller(OPERATOR, token=token), "order": {"heading_deg": 270.0}})
+    rig.run(0.5)
+    assert rig.p.order.value_deg == 270.0
+
+
+def test_a_permitted_controller_that_is_no_instructor_is_still_outranked(default_conf):
+    default_conf["control"]["instructors"] = []
+    rig = _sailing(default_conf)
+    _request(rig)
+    rig.run(0.5)
+    rig.lease(OPERATOR, _granted_token(rig))
+    p = rig.call("set_guidance_order", {"caller": caller(INSTRUCTOR), "order": {"heading_deg": 180.0}})
+    assert p.response["result"] == "COMMAND_RESULT_DENIED"
+
+
+def test_after_a_fallback_any_new_order_re_arms_the_default_holder(default_conf):
+    rig = _sailing(default_conf)
+    rig.mapping = wanted_mapping("roc/helm", 1.0)  # a station takes the helm
+    rig.run(0.5)
+    assert rig.p.conduct.mode is Mode.FALLBACK, rig.p.conduct.reason
+    rig.mapping = {}
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.FALLBACK, "letting go of the helm is no order"
+    p = rig.call("set_guidance_order", {"caller": caller(INSTRUCTOR), "order": {"track": {}}})
+    assert p.response["result"] == "COMMAND_RESULT_ACCEPTED", p.response["detail"]
+    rig.run(1.0)
+    assert rig.p.conduct.mode is Mode.UNDERWAY, rig.p.conduct.reason
+
+
+def test_default_holder_needs_yield_on_request(default_conf):
+    from nav.config import ConfigError, _validate
+
+    default_conf["conduct"]["yield_on_request"] = False
+    with pytest.raises(ConfigError, match="yield_on_request"):
+        _validate(default_conf)

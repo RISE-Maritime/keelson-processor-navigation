@@ -100,6 +100,16 @@ CONDUCT_DEFAULTS = {
     # this process the conn cannot get it back: a live lease cannot be seized, and this one never
     # lapses. Another navigation process's request is never granted.
     "yield_on_request": True,
+    # The ANS is the conn's default holder (Ted, 2026-11-25): whenever no station holds the conn it
+    # takes it, from any mode, and keeps it while it has nothing to do. A station that releases the
+    # conn, or whose lease lapses, hands her back to it with the order in force still in force; a
+    # station granted the conn on request carries that order on until it orders otherwise. Off: the
+    # conn is taken only from READY (take_conn_when_free) and released when there is nothing to sail.
+    "default_holder": False,
+    # default_holder only. Unattended -- the conn its own and no new order -- for this long while
+    # under way, it holds position: a loiter within unattended_hold_radius_m of where she is. 0: never.
+    "unattended_hold_s": 120.0,
+    "unattended_hold_radius_m": 50.0,
     "authority_source": None,
     "authority_max_age_s": 10.0,
     "fixed_authority_level": None,
@@ -153,6 +163,11 @@ CONTROL_DEFAULTS = {
     # a lease token: a scenario runner in simulation, a conduct service once one exists. Anyone
     # holding the conn may always direct it. Empty: only the conn holder.
     "controllers": [],
+    # Exercise instructors (a simulator's station): may order it at any time, even while an operator
+    # holds the conn (Ted, 2026-11-25). The order is carried out under that operator's conn, which
+    # stays theirs, and is reported with ordered_by = the instructor, so the station can raise its
+    # override alarm. Never set on a real vessel.
+    "instructors": [],
     "reply_timeout_s": 3.0,  # how long a call waits for the tick to decide it
     "fetch_timeout_s": 3.0,  # load_route: reading another vessel's route edition from storage
 }
@@ -207,6 +222,10 @@ def allowed_inputs() -> tuple[str, ...]:
 
 def _positive(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _non_negative(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
 
 
 def _validate(conf: dict) -> None:
@@ -277,9 +296,21 @@ def _validate_conduct(conf: dict) -> None:
             raise ConfigError(f"conduct.{key} must be a positive number")
     if cd["heartbeat_s"] >= cd["lease_ttl_s"]:
         raise ConfigError("conduct.heartbeat_s must be shorter than conduct.lease_ttl_s")
-    for key in ("request_conn", "take_conn_when_free", "auto_accept_advice"):
+    for key in ("request_conn", "take_conn_when_free", "auto_accept_advice", "default_holder"):
         if not isinstance(cd[key], bool):
             raise ConfigError(f"conduct.{key} must be true or false")
+    if not _non_negative(cd["unattended_hold_s"]):
+        raise ConfigError("conduct.unattended_hold_s must be a number of seconds, 0 for never")
+    if not _positive(cd["unattended_hold_radius_m"]):
+        raise ConfigError("conduct.unattended_hold_radius_m must be a positive number")
+    if cd["default_holder"]:
+        if not conf["modules"].get("guidance"):
+            raise ConfigError("conduct.default_holder needs module 'guidance': it holds to steer")
+        if not cd["yield_on_request"]:
+            raise ConfigError(
+                "conduct.default_holder needs yield_on_request: it never lets go of a free conn, "
+                "so a station could never get it"
+            )
     source = cd["authority_source"]
     if source is not None:
         if not isinstance(source, str) or not source or "*" in source or "@" in source:
@@ -379,6 +410,9 @@ def _validate_control(conf: dict) -> None:
     controllers = ct["controllers"]
     if not isinstance(controllers, list) or not all(isinstance(c, str) and c for c in controllers):
         raise ConfigError("control.controllers must be a list of non-empty controller ids")
+    instructors = ct["instructors"]
+    if not isinstance(instructors, list) or not all(isinstance(c, str) and c for c in instructors):
+        raise ConfigError("control.instructors must be a list of non-empty controller ids")
     for key in ("reply_timeout_s", "fetch_timeout_s"):
         if not _positive(ct[key]):
             raise ConfigError(f"control.{key} must be a positive number")
